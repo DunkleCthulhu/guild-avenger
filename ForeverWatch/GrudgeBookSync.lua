@@ -1,5 +1,9 @@
-local _, addon = ...
+local addonName, addon = ...
 local prefix = "GrudgeBook2"
+local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
+local downloadURL = "https://github.com/DunkleCthulhu/forever-watch/releases/latest"
+local projectInfo = "Безкоштовний аддон з відкритим кодом. Для розваги, без монетизації."
+local downloadLink = "|Haddon:GrudgeBookDownload|h[GitHub · завантажити]|h"
 local maxEntries = 1000
 local results = Enum.SendAddonMessageResult
 local roster, rosterScope, rosterRequestedAt = {}, nil, nil
@@ -7,6 +11,23 @@ local sending, ticker, sequence = nil, nil, 0
 local incoming = {}
 local published, waiting = {}, {}
 local makePackets, enqueue
+
+local function versionRank(value)
+    local major, minor, patch = value:match("^(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)$")
+    if major then
+        return tonumber(major) * 1000000 + tonumber(minor) * 1000 + tonumber(patch)
+    end
+end
+
+local installedRank = versionRank(version) or 0
+
+local function installMessage(release)
+    return ("GrudgeBook v%s. Встановити/оновити: %s · %s"):format(release, downloadURL, projectInfo)
+end
+
+function addon.OpenDownload()
+    addon.PromptDownload(downloadURL, projectInfo)
+end
 
 local function guildScope()
     local scope = addon.Scope()
@@ -184,7 +205,7 @@ makePackets = function(selection)
 
     sequence = sequence % 65535 + 1
     local id = ("%x.%x"):format(GetServerTime(), sequence)
-    local packets = { ("B\t%s\t%d"):format(id, #entries) }
+    local packets = { ("B\t%s\t%d"):format(id, #entries), ("V\t%s\t%s"):format(id, version) }
     for index, entry in ipairs(entries) do
         local faction = entry.kind == "G" and "G" or (entry.faction == "Alliance" and "A" or "H")
         packets[#packets + 1] = ("R\t%s\t%d\t%s\t%d\t%d\t%s"):format(id, index, faction,
@@ -230,12 +251,21 @@ function addon.Publish(selection)
     end
     published[id] = { packets = packets, at = now, scope = guildScope(), requested = {} }
     C_ChatInfo.SendChatMessage("[GrudgeBook " .. id .. "]", "GUILD")
+    C_ChatInfo.SendChatMessage(installMessage(version), "GUILD")
     return true, "Посилання на список опубліковано в чаті гільдії."
 end
 
 local function chatFilter(_, _, message, sender, ...)
     if not addon.IsText(message) then
         return false
+    end
+    local release = message:match("^GrudgeBook v([%d.]+)%. ")
+    local availableRank = release and versionRank(release)
+    if availableRank and message == installMessage(release) then
+        if availableRank <= installedRank then
+            return true
+        end
+        return false, ("GrudgeBook %s · %s · %s"):format(release, downloadLink, projectInfo), sender, ...
     end
     local id = message:match("^%[GrudgeBook ([%da-f]+%.[%da-f]+)%]$")
     local key = id and #id <= 16 and addon.PlayerName(sender, true)
@@ -248,6 +278,10 @@ end
 
 local function requestLink(_, link, _, mouseButton)
     if not addon.IsText(link) or mouseButton ~= "LeftButton" then
+        return
+    end
+    if link == "addon:GrudgeBookDownload" then
+        addon.OpenDownload()
         return
     end
     local id, sender = link:match("^addon:GrudgeBook:([%da-f]+%.[%da-f]+):([^:]+)$")
@@ -312,7 +346,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         end
         return
     end
-    local operation, id, data = message:match("^([BRNH])\t([%da-f]+%.[%da-f]+)\t(.*)$")
+    local operation, id, data = message:match("^([BRNHV])\t([%da-f]+%.[%da-f]+)\t(.*)$")
     if not operation or #id > 16 then
         return
     end
@@ -334,6 +368,16 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     if not batch or batch.id ~= id or batch.scope ~= guildScope() or now - batch.progressAt > 75 then
         return
     end
+    if operation == "V" then
+        local senderRank = not batch.version and versionRank(data)
+        if senderRank then
+            batch.version = data
+            if senderRank > installedRank then
+                addon.Say(("Список надіслано з новішої версії GrudgeBook %s. %s"):format(data, downloadLink))
+            end
+        end
+        return
+    end
     local indexText, fields = data:match("^(%d+)\t(.*)$")
     local index = tonumber(indexText)
     if not index or index < 1 or index > batch.count then
@@ -350,7 +394,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         end
         record.key, record.name, record.kind = key, full, kind
         record.faction = kind == "P" and (faction == "A" and "Alliance" or "Horde") or nil
-        record.addedAt, record.deaths = addedAt, kind == "P" and deaths or 0
+        record.addedAt, record.deaths = addedAt, deaths
     elseif operation == "H" and record.key and record.note == nil and fields == "1" then
         record.high = true
     elseif operation == "N" and record.note == nil then

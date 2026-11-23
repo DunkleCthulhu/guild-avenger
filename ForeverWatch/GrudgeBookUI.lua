@@ -1,17 +1,19 @@
 local _, addon = ...
-local panel, dialog, review, toast
+local panel, dialog, review, toast, download, minimapButton, soundWindow
 local offers = {}
 local rowCount, rowHeight = 7, 51
+local highPrioritySound = "Interface\\AddOns\\ForeverWatch\\Sounds\\HighPriority.ogg"
+local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
 local color = {
-    border = { 0.39, 0.24, 0.24, 1 },
-    panel = { 0.10, 0.075, 0.082, 0.98 },
-    inset = { 0.064, 0.049, 0.054, 1 },
+    border = { 0.36, 0.29, 0.18, 1 },
+    panel = { 0.11, 0.095, 0.073, 0.98 },
+    inset = { 0.059, 0.052, 0.04, 1 },
     button = { 0.20, 0.13, 0.14, 1 },
     primary = { 0.36, 0.15, 0.16, 1 },
     red = { 1, 0.28, 0.26, 1 },
     gold = { 0.95, 0.75, 0.50, 1 },
-    muted = { 0.79, 0.68, 0.69, 1 },
+    muted = { 0.79, 0.73, 0.63, 1 },
     white = { 0.98, 0.93, 0.90, 1 },
 }
 
@@ -31,15 +33,21 @@ local function label(parent, font, tint, text)
 end
 
 local function button(parent, title, width, callback, primary, template)
-    local control = CreateFrame("Button", nil, parent, template)
+    local flat = template or parent.flatButtons
+    local control = CreateFrame("Button", nil, parent, template or (not flat and "UIPanelButtonTemplate" or nil))
     control:SetSize(width, 27)
-    fill(control, primary and color.primary or color.button, 0, 0)
-    local hover = control:CreateTexture()
-    hover:SetAllPoints()
-    hover:SetColorTexture(1, 1, 1, 0.12)
-    control:SetHighlightTexture(hover)
-    control.label = label(control, "GameFontHighlight", color.white, title)
-    control.label:SetPoint("CENTER")
+    if flat then
+        fill(control, primary and color.primary or color.button, 0, 0)
+        local hover = control:CreateTexture()
+        hover:SetAllPoints()
+        hover:SetColorTexture(1, 1, 1, 0.12)
+        control:SetHighlightTexture(hover)
+        control.label = label(control, "GameFontHighlight", color.white, title)
+        control.label:SetPoint("CENTER")
+    else
+        control:SetText(title)
+        control.label = control:GetFontString()
+    end
     if callback then
         control:SetScript("OnClick", callback)
     end
@@ -65,16 +73,28 @@ local function input(parent, width, limit)
     return box
 end
 
-local function window(name, width, height, strata)
-    local root = CreateFrame("Frame", name, UIParent)
+local windowBackdrop = {
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 22,
+    insets = { left = 5, right = 5, top = 5, bottom = 5 },
+}
+
+local function window(name, width, height, strata, flat)
+    local root = CreateFrame("Frame", name, UIParent, not flat and "BackdropTemplate" or nil)
     root:Hide()
     root:SetPoint("CENTER")
     root:SetSize(width, height)
     root:SetFrameStrata(strata)
     root:SetClampedToScreen(true)
     root:EnableMouse(true)
-    fill(root, color.border, 0, -2)
-    fill(root, color.panel, 1, -1)
+    root.flatButtons = flat
+    if flat then
+        fill(root, color.border, 0, -2)
+        fill(root, color.panel, 1, -1)
+    else
+        root:SetBackdrop(windowBackdrop)
+    end
     return root
 end
 
@@ -97,6 +117,17 @@ local function selectionSize(selection)
     return count
 end
 
+local function manualName()
+    local name = panel.name:GetText()
+    return name ~= panel.prefilledName and name:match("%S") and name or nil
+end
+
+local function updateAddLabels()
+    local manual = manualName()
+    panel.submit.label:SetText(panel.editing and "Зберегти" or (manual and "Додати" or "Додати ціль"))
+    panel.guild.label:SetText(manual and "Додати гільдію" or "Гільдія з цілі")
+end
+
 local function renderRows()
     local slider = panel.scroll
     local offset = math.floor(slider:GetValue())
@@ -110,7 +141,7 @@ local function renderRows()
             row.name:SetText(entry.kind == "G" and "Гільдія: " .. entry.name or entry.name)
             row.note:SetText(entry.note)
             row.metadata:SetText(metadata(entry))
-            row.deaths:SetText(entry.kind == "G" and "-" or ("%d"):format(entry.deaths))
+            row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and "Високий" or "Звичайний")
             row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
         end
@@ -124,21 +155,28 @@ function addon.RefreshUI()
     local scope = addon.Scope()
     if panel.scope ~= scope then
         panel.scope, panel.editing = scope, nil
+        panel.prefilledName = nil
         panel.selected = {}
         panel.name:SetText("")
         panel.note:SetText("")
         panel.scroll:SetValue(0)
     end
-    panel.entries = addon.Entries()
+    local allEntries = addon.Entries()
+    panel.entries = {}
     local present = {}
-    for _, entry in ipairs(panel.entries) do
+    for _, entry in ipairs(allEntries) do
         present[addon.EntryName(entry.name, entry.kind)] = true
+        if (not panel.filterKind or panel.filterKind == entry.kind) and (not panel.filterHigh or entry.high) then
+            panel.entries[#panel.entries + 1] = entry
+        end
     end
     for key in pairs(panel.selected) do
         if not present[key] then panel.selected[key] = nil end
     end
     local selected = selectionSize(panel.selected)
-    panel.count:SetText(("Записів у книзі: %d"):format(#panel.entries))
+    panel.count:SetText(("Записи: %d / %d"):format(#panel.entries, #allEntries))
+    panel.selectAll:SetChecked(#allEntries > 0 and selected == #allEntries)
+    panel.selectAll:SetEnabled(#allEntries > 0)
     local ready = scope ~= nil
     panel.name:SetEnabled(ready and not panel.editing)
     panel.note:SetEnabled(ready)
@@ -146,11 +184,12 @@ function addon.RefreshUI()
     enabled(panel.share, ready and scope ~= "local")
     panel.share.label:SetText(selected > 0 and ("Поділитися (%d)"):format(selected) or "Поділитися переліком")
     panel.clearSelection:SetShown(selected > 0)
-    panel.submit.label:SetText(panel.editing and "Зберегти" or "Додати")
+    updateAddLabels()
     panel.cancel:SetShown(panel.editing ~= nil)
     panel.guild:SetShown(not panel.editing)
     enabled(panel.guild, ready)
-    panel.empty:SetText(ready and "Книга порожня" or "Завантаження гільдії…")
+    panel.empty:SetText(ready and (#allEntries > 0 and "За цим фільтром записів немає" or "Книга порожня")
+        or "Завантаження гільдії…")
     panel.empty:SetShown(#panel.entries == 0)
     local maximum = math.max(0, #panel.entries - rowCount)
     panel.scroll:SetMinMaxValues(0, maximum)
@@ -161,6 +200,7 @@ end
 
 local function resetForm()
     panel.editing = nil
+    panel.prefilledName = nil
     panel.name:SetText("")
     panel.note:SetText("")
     panel.name:ClearFocus()
@@ -169,35 +209,18 @@ end
 
 local function putTarget()
     local _, name = addon.EnemyUnit("target")
-    if not name then
-        return false
-    end
-    panel.name:SetText(name)
-    return true
+    panel.prefilledName = name
+    panel.name:SetText(name or "")
+    updateAddLabels()
 end
 
-local function submit()
-    local name, note = panel.name:GetText(), panel.note:GetText()
-    if name:match("^%s*$") then
-        if putTarget() then
-            panel.note:SetFocus()
-        else
-            status(panel.status, false, "Виберіть ворога або введіть його повне ім’я.")
-        end
-        return
-    end
-    local ok, message
-    if panel.editing then
-        ok, message = addon.EditNote(panel.editing.name, note, panel.editing.kind)
-    else
-        ok, message = addon.Add(name, note)
-    end
+local function finishForm(ok, message, name, kind)
     if ok then
         resetForm()
         addon.RefreshUI()
-        local key = addon.PlayerName(name)
+        local key = addon.EntryName(name, kind)
         for index, entry in ipairs(panel.entries) do
-            if addon.PlayerName(entry.name) == key then
+            if addon.EntryName(entry.name, entry.kind) == key then
                 panel.scroll:SetValue(math.max(0, index - rowCount))
                 break
             end
@@ -206,11 +229,44 @@ local function submit()
     status(panel.status, ok, message)
 end
 
-local function soundOption(parent, x, title, key, checkedByDefault)
+local function submit()
+    local note = panel.note:GetText()
+    local name, kind, ok, message
+    if panel.editing then
+        name, kind = panel.editing.name, panel.editing.kind
+        ok, message = addon.EditNote(name, note, kind)
+    else
+        name = manualName()
+        if name then
+            ok, message = addon.Add(name, note)
+        else
+            local _, target = addon.EnemyUnit("target")
+            if not target then
+                panel.prefilledName = nil
+                panel.name:SetText("")
+                panel.name:SetFocus()
+                status(panel.status, false, "Введіть повне ім’я персонажа або виберіть ворога ціллю.")
+                return
+            end
+            name = target
+            ok, message = addon.Add("", note, "target")
+        end
+    end
+    finishForm(ok, message, name, kind)
+end
+
+local submitGuild
+
+local function checkbox(parent, x, y, title)
     local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     check:SetSize(23, 23)
-    check:SetPoint("TOPLEFT", x, -561)
+    check:SetPoint("TOPLEFT", x, y)
     label(check, "GameFontHighlightSmall", color.white, title):SetPoint("LEFT", check, "RIGHT", 1, 0)
+    return check
+end
+
+local function soundOption(parent, x, y, title, key, checkedByDefault)
+    local check = checkbox(parent, x, y, title)
     local value = GrudgeBookDB.sound[key]
     check:SetChecked(value == true or (value == nil and checkedByDefault))
     check:SetScript("OnClick", function(self)
@@ -218,8 +274,107 @@ local function soundOption(parent, x, title, key, checkedByDefault)
     end)
 end
 
+local sounds = {
+    { "RAID_WARNING", "Рейд-тривога" },
+    { "RAID_BOSS_EMOTE_WARNING", "Попередження рейдового боса" },
+    { "READY_CHECK", "Перевірка готовності" },
+    { "ALARM_CLOCK_WARNING_1", "Будильник 1" },
+    { "ALARM_CLOCK_WARNING_3", "Будильник 3" },
+    { "UI_BNET_TOAST", "Сповіщення Battle.net" },
+    { "MAP_PING", "Пінг на карті" },
+    { "IG_QUEST_LOG_OPEN", "Журнал завдань" },
+}
+
+local function playAlertSound(high)
+    local choice = GrudgeBookDB.sound[high and "highSound" or "normalSound"]
+    local kit = choice and SOUNDKIT[choice]
+    if kit then
+        PlaySound(kit, "Master")
+    elseif not (high and PlaySoundFile and PlaySoundFile(highPrioritySound, "Master")) then
+        PlaySound(high and SOUNDKIT.RAID_BOSS_EMOTE_WARNING or SOUNDKIT.RAID_WARNING, "Master")
+    end
+end
+
+local function soundPicker(root, y, high)
+    local setting = high and "highSound" or "normalSound"
+    local title = high and "Високий пріоритет" or "Звичайний пріоритет"
+    label(root, "GameFontHighlightSmall", color.muted, title):SetPoint("TOPLEFT", 20, y)
+    local dropdown = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
+    dropdown:SetPoint("TOPLEFT", 20, y - 16)
+    dropdown:SetWidth(278)
+    dropdown:SetupMenu(function(_, menu)
+        local function isSelected(choice)
+            return GrudgeBookDB.sound[setting] == choice
+        end
+        local function selectSound(choice)
+            GrudgeBookDB.sound[setting] = choice
+        end
+        local default = high and "Типовий · висхідний сигнал" or "Типовий · рейд-тривога"
+        menu:CreateRadio(default, function() return not SOUNDKIT[GrudgeBookDB.sound[setting] or ""] end,
+            function() selectSound(nil) end)
+        for _, sound in ipairs(sounds) do
+            if SOUNDKIT[sound[1]] then menu:CreateRadio(sound[2], isSelected, selectSound, sound[1]) end
+        end
+    end)
+    button(root, "Прослухати", 104, function() playAlertSound(high) end):SetPoint("LEFT", dropdown, "RIGHT", 10, 0)
+end
+
+function addon.PromptSounds()
+    if not soundWindow then
+        local root = window("GrudgeBookSounds", 436, 247, "FULLSCREEN_DIALOG")
+        tinsert(UISpecialFrames, "GrudgeBookSounds")
+        label(root, "GameFontNormalLarge", color.gold, "Звуки GrudgeBook"):SetPoint("TOPLEFT", 20, -17)
+        soundPicker(root, -51, false)
+        soundPicker(root, -108, true)
+        soundOption(root, 20, -169, "Персонажі", "P", true)
+        soundOption(root, 121, -169, "Гільдії", "G", true)
+        soundOption(root, 196, -169, "Лише високий пріоритет", "highOnly", false)
+        button(root, "Готово", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 15)
+        soundWindow = root
+    end
+    soundWindow:Show()
+end
+
+local function createFilters(root)
+    local titles, kinds = { "Усі", "Персонажі", "Гільдії" }, { false, "P", "G" }
+    root.Tabs = {}
+    root.minTabWidth = 88
+    for index, title in ipairs(titles) do
+        local tab = CreateFrame("Button", nil, root, "PanelTopTabButtonTemplate")
+        root.Tabs[index] = tab
+        tab:SetID(index)
+        tab:SetText(title)
+        tab:SetScript("OnClick", function(self)
+            local id = self:GetID()
+            PanelTemplates_SetTab(root, id)
+            root.filterKind = kinds[id]
+            root.scroll:SetValue(0)
+            addon.RefreshUI()
+        end)
+    end
+    root.Tabs[1]:SetPoint("TOPLEFT", 20, -168)
+    PanelTemplates_SetNumTabs(root, #titles)
+    PanelTemplates_SetTab(root, 1)
+    root.priorityFilter = checkbox(root, 448, -174, "Лише високий пріоритет")
+    root.priorityFilter:SetScript("OnClick", function(self)
+        root.filterHigh = self:GetChecked()
+        root.scroll:SetValue(0)
+        addon.RefreshUI()
+    end)
+    root.selectAll = checkbox(root, 27, -199, "Позначити всі")
+    root.selectAll:SetScript("OnClick", function(self)
+        root.selected = {}
+        if self:GetChecked() then
+            for _, entry in ipairs(addon.Entries()) do
+                root.selected[addon.EntryName(entry.name, entry.kind)] = true
+            end
+        end
+        addon.RefreshUI()
+    end)
+end
+
 local function createPanel()
-    local root = window("GrudgeBookPanel", 662, 635, "DIALOG")
+    local root = window("GrudgeBookPanel", 662, 668, "DIALOG")
     root:SetMovable(true)
     root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GrudgeBookPanel")
@@ -231,34 +386,48 @@ local function createPanel()
     header:RegisterForDrag("LeftButton")
     header:SetScript("OnDragStart", function() root:StartMoving() end)
     header:SetScript("OnDragStop", function() root:StopMovingOrSizing() end)
-    label(header, "GameFontNormalLarge", color.gold, "GrudgeBook"):SetPoint("LEFT")
+    local icon = header:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(22, 22)
+    icon:SetPoint("LEFT")
+    icon:SetTexture(bookIcon)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    label(header, "GameFontNormalLarge", color.gold, "GrudgeBook"):SetPoint("LEFT", 29, 0)
     root.count = label(header, "GameFontHighlightSmall", color.muted)
     root.count:SetPoint("RIGHT")
-    button(root, "×", 27, function() root:Hide() end):SetPoint("TOPRIGHT", -17, -15)
+    local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -5, -5)
+    close:SetScript("OnClick", function() root:Hide() end)
 
-    label(root, "GameFontHighlightSmall", color.muted, "Повне ім’я персонажа"):SetPoint("TOPLEFT", 20, -57)
-    root.name = input(root, 522, addon.NameLimit)
+    label(root, "GameFontHighlightSmall", color.muted, "Повне ім’я персонажа або назва гільдії"):SetPoint("TOPLEFT", 20, -57)
+    root.name = input(root, 518, addon.NameLimit)
     root.name:SetPoint("TOPLEFT", 20, -74)
-    root.submit = button(root, "Додати", 92, submit, true)
+    root.submit = button(root, "Додати ціль", 96, submit, true)
     root.submit:SetPoint("LEFT", root.name, "RIGHT", 8, 0)
     label(root, "GameFontHighlightSmall", color.muted, "Коментар (необов’язково)"):SetPoint("TOPLEFT", 20, -116)
-    root.note = input(root, 522, addon.NoteLimit)
+    root.note = input(root, 518, addon.NoteLimit)
     root.note:SetPoint("TOPLEFT", 20, -133)
-    root.cancel = button(root, "Скасувати", 92, function()
+    root.cancel = button(root, "Скасувати", 96, function()
         resetForm()
         addon.RefreshUI()
         status(root.status, true, "")
     end)
     root.cancel:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
-    root.guild = button(root, "Гільдія з цілі", 92, function() addon.PromptGuild("target") end)
+    root.guild = button(root, "Гільдія з цілі", 96, submitGuild)
     root.guild:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
     root.name:SetScript("OnEnterPressed", submit)
+    root.name:SetScript("OnTextChanged", function(_, userInput)
+        if userInput then
+            root.prefilledName = nil
+            updateAddLabels()
+        end
+    end)
     root.note:SetScript("OnEnterPressed", submit)
     root.name:SetScript("OnTabPressed", function() root.note:SetFocus() end)
+    createFilters(root)
 
     local list = CreateFrame("Frame", nil, root)
-    list:SetPoint("TOPLEFT", 20, -190)
-    list:SetPoint("TOPRIGHT", -20, -190)
+    list:SetPoint("TOPLEFT", 20, -223)
+    list:SetPoint("TOPRIGHT", -20, -223)
     list:SetHeight(rowCount * rowHeight + 4)
     list:EnableMouseWheel(true)
     list:SetScript("OnMouseWheel", function(_, delta)
@@ -320,8 +489,8 @@ local function createPanel()
         end):SetPoint("RIGHT", remove, "LEFT", -6, 0)
         root.rows[index] = row
     end
-    label(root, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("TOPLEFT", 338, -175)
-    label(root, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("TOPLEFT", 405, -175)
+    label(root, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("TOPLEFT", 338, -207)
+    label(root, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("TOPLEFT", 405, -207)
     root.scroll = CreateFrame("Slider", nil, list)
     root.scroll:SetPoint("TOPRIGHT", -3, -3)
     root.scroll:SetPoint("BOTTOMRIGHT", -3, 3)
@@ -337,10 +506,8 @@ local function createPanel()
     thumb:SetColorTexture(unpack(color.gold))
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderRows)
-    label(root, "GameFontHighlightSmall", color.muted, "Звук"):SetPoint("TOPLEFT", 20, -567)
-    soundOption(root, 62, "Персонажі", "P", true)
-    soundOption(root, 160, "Гільдії", "G", true)
-    soundOption(root, 235, "Лише високий пріоритет", "highOnly", false)
+    root.soundSettings = button(root, "Звуки…", 96, addon.PromptSounds)
+    root.soundSettings:SetPoint("TOPLEFT", 20, -594)
     root.share = button(root, "Поділитися переліком", 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
     root.clearSelection = button(root, "Зняти вибір", 105, function()
@@ -358,6 +525,10 @@ local function createPanel()
         root.name:ClearFocus()
         root.note:ClearFocus()
     end)
+    root:RegisterEvent("PLAYER_TARGET_CHANGED")
+    root:SetScript("OnEvent", function(self)
+        if self:IsShown() and not self.editing and not manualName() then putTarget() end
+    end)
     return root
 end
 
@@ -371,9 +542,95 @@ function addon.ToggleUI()
     end
     addon.UpdateScope()
     panel:Show()
-    if not panel.editing and panel.name:GetText() == "" then
+    if not panel.editing and not manualName() then
         putTarget()
     end
+end
+
+function addon.InitMinimap()
+    if minimapButton or not Minimap then return end
+    local root = CreateFrame("Button", "GrudgeBookMinimapButton", Minimap)
+    minimapButton = root
+    root:SetSize(30, 30)
+    root:SetFrameLevel(Minimap:GetFrameLevel() + 8)
+    root:RegisterForClicks("LeftButtonUp")
+    root:RegisterForDrag("LeftButton")
+    local icon = root:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(25, 25)
+    icon:SetPoint("CENTER")
+    icon:SetTexture(bookIcon)
+    local mask = root:CreateMaskTexture()
+    mask:SetAllPoints(icon)
+    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    icon:AddMaskTexture(mask)
+    local highlight = root:CreateTexture()
+    highlight:SetAllPoints(icon)
+    highlight:SetColorTexture(1, 1, 1, 0.24)
+    highlight:AddMaskTexture(mask)
+    root:SetHighlightTexture(highlight)
+
+    local angle = GrudgeBookDB.minimapAngle or math.rad(225)
+    local function place()
+        root:ClearAllPoints()
+        root:SetPoint("CENTER", Minimap, "CENTER",
+            math.cos(angle) * Minimap:GetWidth() / 2, math.sin(angle) * Minimap:GetHeight() / 2)
+    end
+    local dragged
+    root:SetScript("OnMouseDown", function() dragged = false end)
+    root:SetScript("OnClick", function()
+        if not dragged then addon.ToggleUI() end
+    end)
+    root:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("GrudgeBook")
+        GameTooltip:AddLine("Клік або /gb — відкрити книгу\nПеретягування — перемістити значок", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    root:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    root:SetScript("OnDragStart", function(self)
+        dragged = true
+        GameTooltip:Hide()
+        self:SetScript("OnUpdate", function()
+            local x, y = Minimap:GetCenter()
+            if not x or not y then return end
+            local cursorX, cursorY = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            angle = math.atan2(cursorY / scale - y, cursorX / scale - x)
+            place()
+        end)
+    end)
+    root:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+        GrudgeBookDB.minimapAngle = angle
+    end)
+    Minimap:HookScript("OnSizeChanged", place)
+    place()
+end
+
+function addon.PromptDownload(url, description)
+    if not download then
+        local root = window("GrudgeBookDownload", 520, 158, "FULLSCREEN_DIALOG")
+        root:SetFrameLevel(30)
+        tinsert(UISpecialFrames, "GrudgeBookDownload")
+        label(root, "GameFontNormalLarge", color.gold, "Завантаження GrudgeBook"):SetPoint("TOPLEFT", 18, -15)
+        root.description = label(root, "GameFontHighlight", color.white)
+        root.description:SetPoint("TOPLEFT", 18, -43)
+        root.description:SetWidth(484)
+        root.description:SetJustifyH("LEFT")
+        root.field = input(root, 484, 200)
+        root.field:SetPoint("TOPLEFT", 18, -79)
+        root.field:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+        root.field:SetScript("OnMouseUp", function(self) self:HighlightText() end)
+        label(root, "GameFontHighlightSmall", color.muted, "Ctrl+C — скопіювати посилання"):SetPoint("BOTTOMLEFT", 18, 21)
+        button(root, "Закрити", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -18, 13)
+        root:SetScript("OnHide", function() root.field:ClearFocus() end)
+        download = root
+    end
+    download.description:SetText(description)
+    download.field:SetText(url)
+    download:Show()
+    download.field:SetFocus()
+    download.field:HighlightText()
 end
 
 local presentOffer
@@ -491,6 +748,27 @@ local function openDialog(options)
     return true
 end
 
+submitGuild = function()
+    local name, note = manualName(), panel.note:GetText()
+    local _, targetGuild = addon.EnemyEntry("target", "G")
+    if not name and targetGuild then
+        local ok, message = addon.Add("", note, "target", "G")
+        finishForm(ok, message, targetGuild, "G")
+        return
+    end
+    openDialog({
+        title = "Додати гільдію вручну",
+        text = "Назва гільдії",
+        value = name, limit = addon.NameLimit, confirm = "Додати",
+        action = function(guild)
+            if not guild:match("%S") then return false, "Введіть назву гільдії." end
+            local ok, message = addon.Add(guild, note, nil, "G")
+            if ok then finishForm(ok, message, guild, "G") end
+            return ok, message
+        end,
+    })
+end
+
 function addon.PromptShare()
     local _, target = addon.UnitName("target")
     addon.UpdateScope()
@@ -555,7 +833,7 @@ local function renderReview()
             row.priority:SetTextColor(unpack(record.high and color.gold or color.muted))
             row.detail:SetText(record.note ~= "" and record.note or "Без коментаря")
             row.author:SetText((record.author ~= "" and record.author or "Автор невідомий")
-                .. (change.moreDeaths and (" · Смерті: %d"):format(record.deaths) or ""))
+                .. (record.deaths > 0 and (" · Смерті: %d"):format(record.deaths) or ""))
         end
     end
     local selected = selectionSize(offer.selected)
@@ -723,14 +1001,13 @@ end
 
 local alertName, portraitUnit, expiration, targetButton, pingButton
 local alertMoving = false
-local alertWidth, alertHeight, alertAlpha = 250, 72, 0.84
+local alertWidth, alertHeight, alertAlpha = 320, 92, 0.84
 
 local function secured(labelText, width)
     local control = button(UIParent, labelText, width, nil, true,
         "SecureActionButtonTemplate,SecureHandlerStateTemplate")
-    control:SetHeight(18)
+    control:SetHeight(23)
     control:SetAlpha(alertAlpha)
-    control.label:SetFontObject(GameFontHighlightSmall)
     control:SetFrameStrata("HIGH")
     control:SetFrameLevel(toast:GetFrameLevel() + 4)
     control:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
@@ -762,22 +1039,22 @@ local function refreshAlertButtons()
     end
     if not targetButton then
         -- Siblings keep the visual alert dismissible while protected buttons are locked.
-        targetButton = secured("У ціль", 55)
+        targetButton = secured("У ціль", 70)
         targetButton:SetAttribute("type", "macro")
         if C_Ping and C_Ping.IsPingSystemEnabled then
-            pingButton = secured("Пінг небезпеки", 103)
+            pingButton = secured("Пінг небезпеки", 132)
             pingButton:SetAttribute("type", "macro")
             -- The numeric Warning option works in any client language.
             pingButton:SetAttribute("macrotext", "/ping [@target,harm,nodead] 2")
         end
     end
     local right = left - UIParent:GetLeft() + alertWidth
-    local y = bottom - UIParent:GetBottom() + 5
-    positionAlertButton(targetButton, right - 170, y)
+    local y = bottom - UIParent:GetBottom() + 6
+    positionAlertButton(targetButton, right - 218, y)
     targetButton:SetAttribute("macrotext", "/targetexact " .. alertName)
     targetButton:Show()
     if pingButton then
-        positionAlertButton(pingButton, right - 110, y)
+        positionAlertButton(pingButton, right - 141, y)
         local key = addon.PlayerName(alertName)
         pingButton:SetShown(C_Ping.IsPingSystemEnabled() and key ~= nil and key == addon.EnemyUnit("target"))
     end
@@ -823,7 +1100,7 @@ local function positionAlert(root)
 end
 
 local function createAlert()
-    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH")
+    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH", true)
     positionAlert(root)
     root:SetAlpha(alertAlpha)
     root:SetMovable(true)
@@ -849,26 +1126,26 @@ local function createAlert()
     local stripe = root:CreateTexture(nil, "ARTWORK")
     stripe:SetPoint("TOPLEFT", 1, -1)
     stripe:SetPoint("BOTTOMLEFT", 1, 1)
-    stripe:SetWidth(3)
+    stripe:SetWidth(4)
     stripe:SetColorTexture(unpack(color.red))
     root.portrait = root:CreateTexture(nil, "ARTWORK")
-    root.portrait:SetPoint("TOPLEFT", 9, -8)
-    root.portrait:SetSize(30, 30)
-    root.name = label(root, "GameFontNormal", color.red)
-    root.name:SetPoint("TOPLEFT", 46, -7)
-    root.name:SetWidth(179)
+    root.portrait:SetPoint("TOPLEFT", 12, -10)
+    root.portrait:SetSize(38, 38)
+    root.name = label(root, "GameFontNormalLarge", color.red)
+    root.name:SetPoint("TOPLEFT", 59, -9)
+    root.name:SetWidth(229)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
-    root.note = label(root, "GameFontHighlightSmall", color.white)
-    root.note:SetPoint("TOPLEFT", 46, -23)
-    root.note:SetWidth(194)
+    root.note = label(root, "GameFontHighlight", color.white)
+    root.note:SetPoint("TOPLEFT", 59, -29)
+    root.note:SetWidth(248)
     root.note:SetJustifyH("LEFT")
     root.note:SetMaxLines(2)
-    root.priority = label(root, "GameFontHighlightSmall", color.gold, "Високий")
-    root.priority:SetPoint("BOTTOMLEFT", 10, 8)
-    local close = button(root, "×", 17, addon.CloseAlert)
-    close:SetHeight(17)
-    close:SetPoint("TOPRIGHT", -5, -5)
+    root.priority = label(root, "GameFontHighlight", color.gold, "Високий")
+    root.priority:SetPoint("BOTTOMLEFT", 12, 10)
+    local close = button(root, "×", 22, addon.CloseAlert)
+    close:SetHeight(22)
+    close:SetPoint("TOPRIGHT", -6, -6)
     root:RegisterEvent("PLAYER_REGEN_ENABLED")
     root:RegisterEvent("PLAYER_TARGET_CHANGED")
     root:RegisterEvent("DISPLAY_SIZE_CHANGED")
@@ -907,7 +1184,7 @@ function addon.ShowAlert(entry, preview)
     refreshAlertButtons()
     local sound = GrudgeBookDB.sound
     if preview or (sound[entry.kind] ~= false and (not sound.highOnly or entry.high)) then
-        PlaySound(SOUNDKIT.RAID_WARNING, "Master")
+        playAlertSound(entry.high)
     end
     if not alertMoving then
         expiration = C_Timer.NewTimer(12, addon.CloseAlert)

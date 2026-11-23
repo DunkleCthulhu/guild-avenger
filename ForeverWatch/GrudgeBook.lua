@@ -2,8 +2,10 @@ local addonName, addon = ...
 local frame = CreateFrame("Frame")
 local listID, entries
 local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
+local observedGuilds = {}
 local cooldown = 30
 local deathCooldown = 8
+local guildObservationLifetime = 120
 local nameLimit, noteLimit = 96, 104
 local unavailable = "Зачекайте, поки WoW завантажить вашу гільдію."
 local invalidEnemy = "Виберіть доступного для атаки гравця протилежної фракції поза вашою групою й гільдією."
@@ -134,7 +136,7 @@ local function updateScope()
         importLegacy(entries, legacy, "G")
         GrudgeBookDB.guildsImported[id] = true
     end
-    alerts, deaths = {}, {}
+    alerts, deaths, observedGuilds = {}, {}, {}
     for unit in pairs(plates) do
         plates[unit] = false
     end
@@ -224,6 +226,15 @@ local function remember(entry, key, faction, guid)
     end
 end
 
+local function matchGuild(unit, key, faction, guid)
+    local guildKey = guildName((GetGuildInfo(unit)))
+    local guild = guildKey and entries[guildKey]
+    if guid and guildKey then
+        observedGuilds[guid] = guild and { guild = guildKey, player = key, faction = faction, at = GetTime() } or nil
+    end
+    return guild
+end
+
 local function warn(key, entry, player, unit)
     local now = GetTime()
     if alerts[key] and now - alerts[key] < cooldown then
@@ -243,16 +254,17 @@ local function scanUnit(unit, alreadySeen)
         return false
     end
     local key, name, faction, guid = enemyUnit(unit)
-    local entry = key and entries[key]
-    if not entry and key then
-        local guild = guildName((GetGuildInfo(unit)))
-        entry = guild and entries[guild]
+    if not key then
+        return false
     end
+    local personal = entries[key]
+    local guild = matchGuild(unit, key, faction, guid)
+    local entry = personal or guild
     if not entry then
         return false
     end
-    if entry.kind ~= "G" then
-        remember(entry, key, faction, guid)
+    if personal then
+        remember(personal, key, faction, guid)
     end
     if key ~= alreadySeen then
         warn(key, entry, name, unit)
@@ -260,7 +272,18 @@ local function scanUnit(unit, alreadySeen)
     return key
 end
 
+local lastPrune = 0
 local function scanPlates()
+    local now = GetTime()
+    if now - lastPrune >= 30 then
+        lastPrune = now
+        for guid, observation in pairs(observedGuilds) do
+            if now - observation.at > guildObservationLifetime then observedGuilds[guid] = nil end
+        end
+        for guid, death in pairs(deaths) do
+            if now - death.at >= deathCooldown then deaths[guid] = nil end
+        end
+    end
     if not entries or not next(entries) then
         return
     end
@@ -274,23 +297,37 @@ local function recordDeath(guid)
         return
     end
     local key = knownGUIDs[guid]
-    local entry = key and entries[key]
-    if not entry and UnitTokenFromGUID then
-        local candidate, _, faction, resolvedGUID = enemyUnit(UnitTokenFromGUID(guid), true)
-        if candidate and resolvedGUID == guid and entries[candidate] then
-            key, entry = candidate, entries[candidate]
-            remember(entry, key, faction, guid)
+    local personal = key and entries[key]
+    if UnitTokenFromGUID then
+        local unit = UnitTokenFromGUID(guid)
+        local candidate, _, faction, resolvedGUID = enemyUnit(unit, true)
+        if candidate and resolvedGUID == guid then
+            key, personal = candidate, entries[candidate]
+            if personal then remember(personal, key, faction, guid) end
+            matchGuild(unit, key, faction, guid)
         end
     end
-    if not entry or entry.guid ~= guid or not isDifferentFaction(entry.faction) or isAllyName(key) then
-        return
-    end
     local now = GetTime()
-    if deaths[key] and now - deaths[key] < deathCooldown then
+    if personal and (personal.guid ~= guid or not isDifferentFaction(personal.faction) or isAllyName(key)) then
+        personal = nil
+    end
+    local observation = observedGuilds[guid]
+    local guild = observation and now - observation.at <= guildObservationLifetime
+        and isDifferentFaction(observation.faction) and not isAllyName(observation.player) and entries[observation.guild]
+    local death = deaths[guid]
+    if not death or now - death.at >= deathCooldown then death = { at = now } end
+    if not ((personal and not death.player) or (guild and not death.guild)) then
         return
     end
-    deaths[key] = now
-    entry.deaths = math.min(entry.deaths + 1, 2147483647)
+    if personal and not death.player then
+        personal.deaths = math.min(personal.deaths + 1, 2147483647)
+        death.player = true
+    end
+    if guild and not death.guild then
+        guild.deaths = math.min(guild.deaths + 1, 2147483647)
+        death.guild = true
+    end
+    deaths[guid] = death
     addon.RefreshUI()
 end
 
@@ -325,8 +362,9 @@ local function addEnemy(input, reason, fromUnit, kind)
         return false, unavailable
     end
     local unit = fromUnit or "target"
+    local wanted, writtenName
     if input ~= "" then
-        local wanted = entryName(input, kind)
+        wanted, writtenName = entryName(input, kind)
         if not wanted then
             return false, kind == "G" and "Введіть назву гільдії." or "Введіть повне ім’я персонажа."
         end
@@ -338,7 +376,20 @@ local function addEnemy(input, reason, fromUnit, kind)
         end
     end
     local key, name, faction, guid = enemyEntry(unit, kind)
+    if kind == "G" and wanted and not fromUnit and not key then
+        local ownGuild = guildName((GetGuildInfo("player")))
+        if IsInGuild() and not ownGuild then
+            return false, unavailable
+        end
+        if wanted == ownGuild then
+            return false, "Власну гільдію додати не можна."
+        end
+        key, name = wanted, writtenName
+    end
     if not key then
+        if wanted and kind ~= "G" then
+            return false, "WoW має бачити цього персонажа, щоб перевірити, що він ворог."
+        end
         return false, kind == "G" and "Виберіть доступного ворога, чию гільдію видно." or invalidEnemy
     end
     if entries[key] then
@@ -352,7 +403,10 @@ local function addEnemy(input, reason, fromUnit, kind)
     local entry = { name = name, note = note, author = author or "", addedAt = GetServerTime(),
         deaths = 0, kind = kind or "P" }
     entries[key] = entry
-    if kind ~= "G" then
+    if kind == "G" then
+        local player, _, observedFaction, observedGUID = enemyUnit(unit)
+        if player then matchGuild(unit, player, observedFaction, observedGUID) end
+    else
         remember(entry, key, faction, guid)
     end
     addon.RefreshUI()
@@ -395,7 +449,7 @@ local function deleteEnemy(input, kind)
     if entry.guid then
         knownGUIDs[entry.guid] = nil
     end
-    entries[key], alerts[key], deaths[key] = nil, nil, nil
+    entries[key], alerts[key] = nil, nil
     addon.RefreshUI()
     return true, "Вилучено " .. entry.name .. "."
 end
@@ -423,7 +477,7 @@ local function mergeEntries(incoming, preview)
                     entries[key] = record
                 end
             else
-                local moreDeaths = record.kind ~= "G" and record.deaths > previous.deaths
+                local moreDeaths = record.deaths > previous.deaths
                 local higherPriority = record.high == true and not previous.high
                 if moreDeaths or higherPriority then
                     updated = updated + 1
@@ -478,12 +532,22 @@ local function splitAdd(input)
     return name or input, reason or ""
 end
 
+local function showHelp()
+    say("/gb або /gb ui — відкрити книгу · /gb list — показати записи в чаті")
+    say("/gb add [Ім’я Прізвище] [Коментар] · /gb del [Ім’я Прізвище]")
+    say('/gb guild add ["Назва гільдії"] [Коментар] · /gb guild del [Назва гільдії]')
+    say("/gb share [Ім’я Прізвище] — гільдійцю · /gb share guild — у чат гільдії")
+    say("/gb test [high] — перевірити сповіщення · /gb download — посилання на GitHub")
+end
+
 local function slash(input)
     local command, rest = input:match("^%s*(%S*)%s*(.-)%s*$")
     command = command:lower()
     local _, message
     if command == "" or command == "ui" then
         addon.ToggleUI()
+    elseif command == "help" or command == "?" then
+        showHelp()
     elseif command == "add" then
         _, message = addEnemy(splitAdd(rest))
     elseif command == "guild" then
@@ -499,16 +563,25 @@ local function slash(input)
     elseif command == "del" or command == "remove" then
         _, message = deleteEnemy(rest)
     elseif command == "share" then
-        _, message = addon.Share(rest)
+        if rest:lower() == "guild" then
+            _, message = addon.Publish()
+        else
+            _, message = addon.Share(rest)
+        end
     elseif command == "test" then
-        addon.ShowAlert({ name = "GrudgeBook", note = "Тест сповіщення.", unit = "player" }, true)
+        addon.ShowAlert({ name = "GrudgeBook", note = "Тест сповіщення.", unit = "player",
+            high = rest:lower() == "high" }, true)
+    elseif command == "download" then
+        addon.OpenDownload()
     elseif command == "list" then
-        for _, entry in ipairs(sortedEntries()) do
-            say(entry.kind == "G" and ("Гільдія «%s»"):format(entry.name)
-                or ("%s — смертей: %d"):format(entry.name, entry.deaths))
+        local list = sortedEntries()
+        say(#list == 0 and "Книга порожня." or ("Записів у Книзі Образ: %d"):format(#list))
+        for _, entry in ipairs(list) do
+            local name = entry.kind == "G" and ("Гільдія «%s»"):format(entry.name) or entry.name
+            say((entry.high and "[Високий] " or "[Звичайний] ") .. ("%s · смертей: %d"):format(name, entry.deaths))
         end
     else
-        message = "/gb ui, /gb add [Ім’я Прізвище] [Коментар], /gb del [Ім’я Прізвище], /gb share [Ім’я Прізвище]"
+        message = "Невідома команда. Введіть /gb help."
     end
     if message then
         say(message)
@@ -530,10 +603,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         updateScope()
         addon.RefreshRoster()
         addon.InitMenus()
+        if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
     elseif event == "PLAYER_LEAVING_WORLD" then
-        plates = {}
+        plates, observedGuilds, deaths = {}, {}, {}
         addon.CloseAlert()
     elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" then
         scanUnit(event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover")
@@ -558,13 +632,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "UNIT_HEALTH" then
         local unit = ...
-        if isText(unit) and (unit == "target" or unit == "mouseover" or plates[unit]) then
+        if isText(unit) and (unit == "target" or unit == "mouseover" or unit == "focus" or plates[unit] ~= nil) then
             local guid = UnitGUID(unit)
-            local key = isText(guid) and knownGUIDs[guid]
-            if key and deaths[key] and GetTime() - deaths[key] >= 1 then
+            local death = isText(guid) and deaths[guid]
+            if death and GetTime() - death.at >= 1 then
                 local dead = UnitIsDeadOrGhost(unit)
                 if ordinary(dead) and dead == false then
-                    deaths[key] = nil
+                    deaths[guid] = nil
                 end
             end
         end
