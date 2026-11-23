@@ -10,7 +10,6 @@ local color = {
     panel = { 0.11, 0.095, 0.073, 0.98 },
     inset = { 0.059, 0.052, 0.04, 1 },
     button = { 0.20, 0.13, 0.14, 1 },
-    primary = { 0.36, 0.15, 0.16, 1 },
     red = { 1, 0.28, 0.26, 1 },
     gold = { 0.95, 0.75, 0.50, 1 },
     muted = { 0.79, 0.73, 0.63, 1 },
@@ -32,22 +31,19 @@ local function label(parent, font, tint, text)
     return result
 end
 
-local function button(parent, title, width, callback, primary, template)
-    local flat = template or parent.flatButtons
-    local control = CreateFrame("Button", nil, parent, template or (not flat and "UIPanelButtonTemplate" or nil))
+local function maskCircle(parent, texture)
+    local mask = parent:CreateMaskTexture()
+    mask:SetAllPoints(texture)
+    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    texture:AddMaskTexture(mask)
+    return mask
+end
+
+local function button(parent, title, width, callback, template)
+    local control = CreateFrame("Button", nil, parent, template or "UIPanelButtonTemplate")
     control:SetSize(width, 27)
-    if flat then
-        fill(control, primary and color.primary or color.button, 0, 0)
-        local hover = control:CreateTexture()
-        hover:SetAllPoints()
-        hover:SetColorTexture(1, 1, 1, 0.12)
-        control:SetHighlightTexture(hover)
-        control.label = label(control, "GameFontHighlight", color.white, title)
-        control.label:SetPoint("CENTER")
-    else
-        control:SetText(title)
-        control.label = control:GetFontString()
-    end
+    control:SetText(title)
+    control.label = control:GetFontString()
     if callback then
         control:SetScript("OnClick", callback)
     end
@@ -80,21 +76,15 @@ local windowBackdrop = {
     insets = { left = 5, right = 5, top = 5, bottom = 5 },
 }
 
-local function window(name, width, height, strata, flat)
-    local root = CreateFrame("Frame", name, UIParent, not flat and "BackdropTemplate" or nil)
+local function window(name, width, height, strata)
+    local root = CreateFrame("Frame", name, UIParent, "BackdropTemplate")
     root:Hide()
     root:SetPoint("CENTER")
     root:SetSize(width, height)
     root:SetFrameStrata(strata)
     root:SetClampedToScreen(true)
     root:EnableMouse(true)
-    root.flatButtons = flat
-    if flat then
-        fill(root, color.border, 0, -2)
-        fill(root, color.panel, 1, -1)
-    else
-        root:SetBackdrop(windowBackdrop)
-    end
+    root:SetBackdrop(windowBackdrop)
     return root
 end
 
@@ -401,7 +391,7 @@ local function createPanel()
     label(root, "GameFontHighlightSmall", color.muted, "Повне ім’я персонажа або назва гільдії"):SetPoint("TOPLEFT", 20, -57)
     root.name = input(root, 518, addon.NameLimit)
     root.name:SetPoint("TOPLEFT", 20, -74)
-    root.submit = button(root, "Додати ціль", 96, submit, true)
+    root.submit = button(root, "Додати ціль", 96, submit)
     root.submit:SetPoint("LEFT", root.name, "RIGHT", 8, 0)
     label(root, "GameFontHighlightSmall", color.muted, "Коментар (необов’язково)"):SetPoint("TOPLEFT", 20, -116)
     root.note = input(root, 518, addon.NoteLimit)
@@ -559,10 +549,7 @@ function addon.InitMinimap()
     icon:SetSize(25, 25)
     icon:SetPoint("CENTER")
     icon:SetTexture(bookIcon)
-    local mask = root:CreateMaskTexture()
-    mask:SetAllPoints(icon)
-    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    icon:AddMaskTexture(mask)
+    local mask = maskCircle(root, icon)
     local highlight = root:CreateTexture()
     highlight:SetAllPoints(icon)
     highlight:SetColorTexture(1, 1, 1, 0.24)
@@ -692,7 +679,7 @@ local function createDialog()
     root.status:SetWidth(392)
     root.status:SetJustifyH("LEFT")
     root.status:SetMaxLines(2)
-    root.confirm = button(root, "", 98, submitDialog, true)
+    root.confirm = button(root, "", 98, submitDialog)
     root.confirm:SetPoint("BOTTOMRIGHT", -18, 13)
     root.cancel = button(root, "", 98, function() root:Hide() end)
     root.cancel:SetPoint("RIGHT", root.confirm, "LEFT", -7, 0)
@@ -930,7 +917,7 @@ local function createReview()
         end
         root:Hide()
         offer.accept(selected)
-    end, true)
+    end)
     root.confirm:SetPoint("BOTTOMRIGHT", -18, 15)
     root.cancel = button(root, "Відхилити", 102, function() root:Hide() end)
     root.cancel:SetPoint("RIGHT", root.confirm, "LEFT", -7, 0)
@@ -1002,10 +989,12 @@ end
 local alertName, portraitUnit, expiration, targetButton, pingButton
 local alertMoving = false
 local alertWidth, alertHeight, alertAlpha = 320, 92, 0.84
+local alertBorder = { 0.88, 0.85, 0.76, 1 }
+local urgentBorder = { 1, 0.70, 0.36, 1 }
 
 local function secured(labelText, width)
-    local control = button(UIParent, labelText, width, nil, true,
-        "SecureActionButtonTemplate,SecureHandlerStateTemplate")
+    local control = button(UIParent, labelText, width, nil,
+        "UIPanelButtonTemplate,SecureActionButtonTemplate,SecureHandlerStateTemplate")
     control:SetHeight(23)
     control:SetAlpha(alertAlpha)
     control:SetFrameStrata("HIGH")
@@ -1049,7 +1038,7 @@ local function refreshAlertButtons()
         end
     end
     local right = left - UIParent:GetLeft() + alertWidth
-    local y = bottom - UIParent:GetBottom() + 6
+    local y = bottom - UIParent:GetBottom() + 8
     positionAlertButton(targetButton, right - 218, y)
     targetButton:SetAttribute("macrotext", "/targetexact " .. alertName)
     targetButton:Show()
@@ -1085,7 +1074,7 @@ local function refreshAlertPortrait()
     end
     local ready = not IsUnitModelReadyForUI or IsUnitModelReadyForUI(portraitUnit)
     if addon.Ordinary(ready) and ready then
-        SetPortraitTexture(toast.portrait, portraitUnit)
+        SetPortraitTexture(toast.portrait, portraitUnit, true)
     end
 end
 
@@ -1100,9 +1089,10 @@ local function positionAlert(root)
 end
 
 local function createAlert()
-    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH", true)
+    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH")
     positionAlert(root)
     root:SetAlpha(alertAlpha)
+    root:SetBackdropColor(0.40, 0.34, 0.28, 0.98)
     root:SetMovable(true)
     root:RegisterForDrag("LeftButton")
     root:SetScript("OnDragStart", function(self)
@@ -1123,29 +1113,34 @@ local function createAlert()
         refreshAlertButtons()
         expiration = C_Timer.NewTimer(12, addon.CloseAlert)
     end)
-    local stripe = root:CreateTexture(nil, "ARTWORK")
-    stripe:SetPoint("TOPLEFT", 1, -1)
-    stripe:SetPoint("BOTTOMLEFT", 1, 1)
-    stripe:SetWidth(4)
-    stripe:SetColorTexture(unpack(color.red))
     root.portrait = root:CreateTexture(nil, "ARTWORK")
-    root.portrait:SetPoint("TOPLEFT", 12, -10)
-    root.portrait:SetSize(38, 38)
-    root.name = label(root, "GameFontNormalLarge", color.red)
-    root.name:SetPoint("TOPLEFT", 59, -9)
-    root.name:SetWidth(229)
+    root.portrait:SetPoint("TOPLEFT", 16, -15)
+    root.portrait:SetSize(40, 40)
+    maskCircle(root, root.portrait)
+    local portraitFrame = root:CreateTexture(nil, "OVERLAY")
+    portraitFrame:SetAtlas("UI-Frame-Portrait", false)
+    portraitFrame:SetPoint("CENTER", root.portrait)
+    portraitFrame:SetSize(51, 51)
+    root.name = label(root, "GameFontNormalLarge", color.gold)
+    root.name:SetPoint("TOPLEFT", 67, -13)
+    root.name:SetWidth(221)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
     root.note = label(root, "GameFontHighlight", color.white)
-    root.note:SetPoint("TOPLEFT", 59, -29)
-    root.note:SetWidth(248)
+    root.note:SetPoint("TOPLEFT", 67, -34)
+    root.note:SetWidth(236)
     root.note:SetJustifyH("LEFT")
     root.note:SetMaxLines(2)
-    root.priority = label(root, "GameFontHighlight", color.gold, "Високий")
-    root.priority:SetPoint("BOTTOMLEFT", 12, 10)
-    local close = button(root, "×", 22, addon.CloseAlert)
-    close:SetHeight(22)
-    close:SetPoint("TOPRIGHT", -6, -6)
+    local divider = root:CreateTexture(nil, "ARTWORK")
+    divider:SetPoint("TOPLEFT", 67, -59)
+    divider:SetPoint("TOPRIGHT", -15, -59)
+    divider:SetHeight(1)
+    divider:SetColorTexture(0.66, 0.49, 0.25, 0.55)
+    root.priority = label(root, "GameFontHighlightSmall", color.gold, "Високий")
+    root.priority:SetPoint("BOTTOMLEFT", 15, 14)
+    local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -5, -5)
+    close:SetScript("OnClick", addon.CloseAlert)
     root:RegisterEvent("PLAYER_REGEN_ENABLED")
     root:RegisterEvent("PLAYER_TARGET_CHANGED")
     root:RegisterEvent("DISPLAY_SIZE_CHANGED")
@@ -1177,7 +1172,7 @@ function addon.ShowAlert(entry, preview)
     toast.portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
     refreshAlertPortrait()
     toast.name:SetText(entry.name)
-    toast.name:SetTextColor(unpack(entry.high and color.gold or color.red))
+    toast:SetBackdropBorderColor(unpack(entry.high and urgentBorder or alertBorder))
     toast.note:SetText(entry.note)
     toast.priority:SetShown(entry.high == true)
     toast:Show()
