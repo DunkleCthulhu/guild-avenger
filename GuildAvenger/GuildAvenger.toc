@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: Guild Avenger
+## Notes: Enemy watchlist, encounter alerts, and consent-based guild sharing for WoW: Forever.
+## Version: 3.0.0
+## SavedVariables: GuildAvengerDB, GuildAvengerLegacyDB
+
+GuildAvenger.lua
+GuildAvengerSync.lua
+GuildAvengerStats.lua
+GuildAvengerUI.lua

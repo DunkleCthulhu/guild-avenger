@@ -1,5 +1,5 @@
 local _, addon = ...
-local prefix = "GrudgeStats1"
+local prefix = "GuildAvStats1"
 local maxCount = 2147483647
 local journalLimit = 100
 local heldDeath, latestDeath, sendTicker, lastRequest, lastReply
@@ -17,7 +17,7 @@ end
 local function guildData()
     local scope = addon.Scope()
     if not scope or scope == "local" or not IsInGuild() then return end
-    local guilds = GrudgeBookDB.stats.guilds
+    local guilds = GuildAvengerDB.stats.guilds
     if not guilds[scope] then guilds[scope] = { own = {}, peers = {} } end
     return guilds[scope], scope
 end
@@ -39,7 +39,7 @@ local function weeklyKills(score, week)
 end
 
 function addon.InitStats()
-    GrudgeBookDB.stats = GrudgeBookDB.stats or { journals = {}, guilds = {} }
+    GuildAvengerDB.stats = GuildAvengerDB.stats or { journals = {}, guilds = {} }
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
 end
 
@@ -62,7 +62,7 @@ end
 local function journal()
     local guid = playerGUID(UnitGUID("player"))
     if not guid then return end
-    local journals = GrudgeBookDB.stats.journals
+    local journals = GuildAvengerDB.stats.journals
     if not journals[guid] then journals[guid] = {} end
     return journals[guid]
 end

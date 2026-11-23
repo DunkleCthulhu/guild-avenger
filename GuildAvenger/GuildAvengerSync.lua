@@ -1,9 +1,9 @@
 local addonName, addon = ...
-local prefix = "GrudgeBook2"
+local prefix = "GuildAvenger2"
 local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
 local downloadURL = "https://github.com/DunkleCthulhu/forever-watch/releases/latest"
 local projectInfo = "Безкоштовний аддон з відкритим кодом. Для розваги, без монетизації."
-local downloadLink = "|Haddon:GrudgeBookDownload|h[GitHub · завантажити]|h"
+local downloadLink = "|Haddon:GuildAvengerDownload|h[GitHub · завантажити]|h"
 local maxEntries = 1000
 local results = Enum.SendAddonMessageResult
 local roster, rosterScope, rosterRequestedAt = {}, nil, nil
@@ -22,7 +22,7 @@ end
 local installedRank = versionRank(version) or 0
 
 local function installMessage(release)
-    return ("GrudgeBook v%s. Встановити/оновити: %s · %s"):format(release, downloadURL, projectInfo)
+    return ("Guild Avenger v%s. Встановити/оновити: %s · %s"):format(release, downloadURL, projectInfo)
 end
 
 function addon.OpenDownload()
@@ -257,7 +257,7 @@ function addon.Publish(selection, includeRemovals)
         end
     end
     published[id] = { packets = packets, at = now, scope = guildScope(), requested = {} }
-    C_ChatInfo.SendChatMessage("[GrudgeBook " .. id .. "]", "GUILD")
+    C_ChatInfo.SendChatMessage("[Guild Avenger " .. id .. "]", "GUILD")
     C_ChatInfo.SendChatMessage(installMessage(version), "GUILD")
     return true, "Посилання на список опубліковано в чаті гільдії."
 end
@@ -266,20 +266,20 @@ local function chatFilter(_, _, message, sender, ...)
     if not addon.IsText(message) then
         return false
     end
-    local release = message:match("^GrudgeBook v([%d.]+)%. ")
+    local release = message:match("^GuildAvenger v([%d.]+)%. ")
     local availableRank = release and versionRank(release)
     if availableRank and message == installMessage(release) then
         if availableRank <= installedRank then
             return true
         end
-        return false, ("GrudgeBook %s · %s · %s"):format(release, downloadLink, projectInfo), sender, ...
+        return false, ("Guild Avenger %s · %s · %s"):format(release, downloadLink, projectInfo), sender, ...
     end
-    local id = message:match("^%[GrudgeBook ([%da-f]+%.[%da-f]+)%]$")
+    local id = message:match("^%[Guild Avenger ([%da-f]+%.[%da-f]+)%]$")
     local key = id and #id <= 16 and addon.PlayerName(sender, true)
     if not key then
         return false
     end
-    local link = ("|Haddon:GrudgeBook:%s:%s|h[Перелік GrudgeBook]|h"):format(id, key)
+    local link = ("|Haddon:GuildAvenger:%s:%s|h[Перелік Guild Avenger]|h"):format(id, key)
     return false, link, sender, ...
 end
 
@@ -287,11 +287,11 @@ local function requestLink(_, link, _, mouseButton)
     if not addon.IsText(link) or mouseButton ~= "LeftButton" then
         return
     end
-    if link == "addon:GrudgeBookDownload" then
+    if link == "addon:GuildAvengerDownload" then
         addon.OpenDownload()
         return
     end
-    local id, sender = link:match("^addon:GrudgeBook:([%da-f]+%.[%da-f]+):([^:]+)$")
+    local id, sender = link:match("^addon:GuildAvenger:([%da-f]+%.[%da-f]+):([^:]+)$")
     if not id or #id > 16 or not addon.UpdateScope() or not guildScope() then
         return
     end
@@ -388,7 +388,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
             batch.version = data
             batch.explicit = senderRank >= 2004000
             if senderRank > installedRank then
-                addon.Say(("Список надіслано з новішої версії GrudgeBook %s. %s"):format(data, downloadLink))
+                addon.Say(("Список надіслано з новішої версії Guild Avenger %s. %s"):format(data, downloadLink))
             end
         end
         return

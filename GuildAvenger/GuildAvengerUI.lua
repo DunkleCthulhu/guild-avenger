@@ -3,7 +3,7 @@ local panel, dialog, review, toast, download, minimapButton, soundWindow
 local statsWindow, commentWindow
 local offers = {}
 local rowCount, mainRowCount, rowHeight = 7, 6, 51
-local highPrioritySound = "Interface\\AddOns\\ForeverWatch\\Sounds\\HighPriority.ogg"
+local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
 local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
 local color = {
@@ -91,9 +91,9 @@ end
 
 local function showComment(text)
     if not commentWindow then
-        local root = window("GrudgeBookComment", 500, 174, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerComment", 500, 174, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(32)
-        tinsert(UISpecialFrames, "GrudgeBookComment")
+        tinsert(UISpecialFrames, "GuildAvengerComment")
         label(root, "GameFontNormalLarge", color.gold, "Коментар"):SetPoint("TOPLEFT", 20, -16)
         root.text = label(root, "GameFontHighlight", color.white)
         root.text:SetPoint("TOPLEFT", 20, -47)
@@ -302,10 +302,10 @@ end
 
 local function soundOption(parent, x, y, title, key, checkedByDefault)
     local check = checkbox(parent, x, y, title)
-    local value = GrudgeBookDB.sound[key]
+    local value = GuildAvengerDB.sound[key]
     check:SetChecked(value == true or (value == nil and checkedByDefault))
     check:SetScript("OnClick", function(self)
-        GrudgeBookDB.sound[key] = self:GetChecked() == true
+        GuildAvengerDB.sound[key] = self:GetChecked() == true
     end)
 end
 
@@ -321,7 +321,7 @@ local sounds = {
 }
 
 local function playAlertSound(high)
-    local choice = GrudgeBookDB.sound[high and "highSound" or "normalSound"]
+    local choice = GuildAvengerDB.sound[high and "highSound" or "normalSound"]
     local kit = choice and SOUNDKIT[choice]
     if kit then
         PlaySound(kit, "Master")
@@ -339,13 +339,13 @@ local function soundPicker(root, y, high)
     dropdown:SetWidth(278)
     dropdown:SetupMenu(function(_, menu)
         local function isSelected(choice)
-            return GrudgeBookDB.sound[setting] == choice
+            return GuildAvengerDB.sound[setting] == choice
         end
         local function selectSound(choice)
-            GrudgeBookDB.sound[setting] = choice
+            GuildAvengerDB.sound[setting] = choice
         end
         local default = high and "Типовий · висхідний сигнал" or "Типовий · рейд-тривога"
-        menu:CreateRadio(default, function() return not SOUNDKIT[GrudgeBookDB.sound[setting] or ""] end,
+        menu:CreateRadio(default, function() return not SOUNDKIT[GuildAvengerDB.sound[setting] or ""] end,
             function() selectSound(nil) end)
         for _, sound in ipairs(sounds) do
             if SOUNDKIT[sound[1]] then menu:CreateRadio(sound[2], isSelected, selectSound, sound[1]) end
@@ -356,9 +356,9 @@ end
 
 function addon.PromptSounds()
     if not soundWindow then
-        local root = window("GrudgeBookSounds", 436, 247, "FULLSCREEN_DIALOG")
-        tinsert(UISpecialFrames, "GrudgeBookSounds")
-        label(root, "GameFontNormalLarge", color.gold, "Звуки GrudgeBook"):SetPoint("TOPLEFT", 20, -17)
+        local root = window("GuildAvengerSounds", 436, 247, "FULLSCREEN_DIALOG")
+        tinsert(UISpecialFrames, "GuildAvengerSounds")
+        label(root, "GameFontNormalLarge", color.gold, "Звуки Guild Avenger"):SetPoint("TOPLEFT", 20, -17)
         soundPicker(root, -51, false)
         soundPicker(root, -108, true)
         soundOption(root, 20, -169, "Персонажі", "P", true)
@@ -422,10 +422,10 @@ local function createFilters(root)
 end
 
 local function createPanel()
-    local root = window("GrudgeBookPanel", 662, 622, "DIALOG")
+    local root = window("GuildAvengerPanel", 662, 622, "DIALOG")
     root:SetMovable(true)
     root.rows, root.entries, root.selected = {}, {}, {}
-    tinsert(UISpecialFrames, "GrudgeBookPanel")
+    tinsert(UISpecialFrames, "GuildAvengerPanel")
     local header = CreateFrame("Frame", nil, root)
     header:SetPoint("TOPLEFT", 20, -12)
     header:SetPoint("TOPRIGHT", -57, -12)
@@ -439,7 +439,7 @@ local function createPanel()
     icon:SetPoint("LEFT")
     icon:SetTexture(bookIcon)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    label(header, "GameFontNormalLarge", color.gold, "GrudgeBook"):SetPoint("LEFT", 29, 0)
+    label(header, "GameFontNormalLarge", color.gold, "Guild Avenger"):SetPoint("LEFT", 29, 0)
     root.count = label(header, "GameFontHighlightSmall", color.muted)
     root.count:SetPoint("RIGHT")
     root.search = input(root, 210, addon.NoteLimit)
@@ -659,11 +659,11 @@ function addon.RefreshStats()
 end
 
 local function createStats()
-    local root = window("GrudgeBookStats", 540, 532, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerStats", 540, 532, "FULLSCREEN_DIALOG")
     root.page, root.rows, root.Tabs = 1, {}, {}
     root.minTabWidth = 100
-    tinsert(UISpecialFrames, "GrudgeBookStats")
-    label(root, "GameFontNormalLarge", color.gold, "Статистика GrudgeBook"):SetPoint("TOPLEFT", 20, -18)
+    tinsert(UISpecialFrames, "GuildAvengerStats")
+    label(root, "GameFontNormalLarge", color.gold, "Статистика Guild Avenger"):SetPoint("TOPLEFT", 20, -18)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
@@ -749,7 +749,7 @@ end
 
 function addon.InitMinimap()
     if minimapButton or not Minimap then return end
-    local root = CreateFrame("Button", "GrudgeBookMinimapButton", Minimap)
+    local root = CreateFrame("Button", "GuildAvengerMinimapButton", Minimap)
     minimapButton = root
     root:SetSize(30, 30)
     root:SetFrameLevel(Minimap:GetFrameLevel() + 8)
@@ -766,7 +766,7 @@ function addon.InitMinimap()
     highlight:AddMaskTexture(mask)
     root:SetHighlightTexture(highlight)
 
-    local angle = GrudgeBookDB.minimapAngle or math.rad(225)
+    local angle = GuildAvengerDB.minimapAngle or math.rad(225)
     local function place()
         root:ClearAllPoints()
         root:SetPoint("CENTER", Minimap, "CENTER",
@@ -779,8 +779,8 @@ function addon.InitMinimap()
     end)
     root:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("GrudgeBook")
-        GameTooltip:AddLine("Клік або /gb — відкрити книгу\nПеретягування — перемістити значок", 1, 1, 1)
+        GameTooltip:SetText("Guild Avenger")
+        GameTooltip:AddLine("Клік або /gavenger — відкрити книгу\nПеретягування — перемістити значок", 1, 1, 1)
         GameTooltip:Show()
     end)
     root:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -798,7 +798,7 @@ function addon.InitMinimap()
     end)
     root:SetScript("OnDragStop", function(self)
         self:SetScript("OnUpdate", nil)
-        GrudgeBookDB.minimapAngle = angle
+        GuildAvengerDB.minimapAngle = angle
     end)
     Minimap:HookScript("OnSizeChanged", place)
     place()
@@ -806,10 +806,10 @@ end
 
 function addon.PromptDownload(url, description)
     if not download then
-        local root = window("GrudgeBookDownload", 520, 158, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerDownload", 520, 158, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(30)
-        tinsert(UISpecialFrames, "GrudgeBookDownload")
-        label(root, "GameFontNormalLarge", color.gold, "Завантаження GrudgeBook"):SetPoint("TOPLEFT", 18, -15)
+        tinsert(UISpecialFrames, "GuildAvengerDownload")
+        label(root, "GameFontNormalLarge", color.gold, "Завантаження Guild Avenger"):SetPoint("TOPLEFT", 18, -15)
         root.description = label(root, "GameFontHighlight", color.white)
         root.description:SetPoint("TOPLEFT", 18, -43)
         root.description:SetWidth(484)
@@ -858,8 +858,8 @@ local function submitDialog()
 end
 
 local function createDialog()
-    local root = window("GrudgeBookDialog", 428, 190, "FULLSCREEN_DIALOG")
-    tinsert(UISpecialFrames, "GrudgeBookDialog")
+    local root = window("GuildAvengerDialog", 428, 190, "FULLSCREEN_DIALOG")
+    tinsert(UISpecialFrames, "GuildAvengerDialog")
     root.title = label(root, "GameFontNormalLarge", color.gold)
     root.title:SetPoint("TOPLEFT", 18, -15)
     root.text = label(root, "GameFontHighlight", color.white)
@@ -1078,10 +1078,10 @@ local function selectAll(value, additionsAndCountsOnly)
 end
 
 local function createReview()
-    local root = window("GrudgeBookReview", 516, 560, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerReview", 516, 560, "FULLSCREEN_DIALOG")
     local reviewRowHeight = 52
     root.rows = {}
-    tinsert(UISpecialFrames, "GrudgeBookReview")
+    tinsert(UISpecialFrames, "GuildAvengerReview")
     label(root, "GameFontNormalLarge", color.gold, "Імпорт Книги Образ"):SetPoint("TOPLEFT", 18, -15)
     root.sender = label(root, "GameFontHighlight", color.white)
     root.sender:SetPoint("TOPLEFT", 18, -43)
@@ -1248,10 +1248,10 @@ local function secured(labelText, width)
     control:SetFrameStrata("HIGH")
     control:SetFrameLevel(toast:GetFrameLevel() + 4)
     control:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-    control:SetAttribute("_onstate-grudgecombat", [[
+    control:SetAttribute("_onstate-guildavengercombat", [[
         if newstate == "combat" then self:Hide() end
     ]])
-    RegisterStateDriver(control, "grudgecombat", "[combat] combat; safe")
+    RegisterStateDriver(control, "guildavengercombat", "[combat] combat; safe")
     return control
 end
 
@@ -1327,7 +1327,7 @@ local function refreshAlertPortrait()
 end
 
 local function positionAlert(root)
-    local saved = GrudgeBookDB.alertPosition
+    local saved = GuildAvengerDB.alertPosition
     root:ClearAllPoints()
     if type(saved) == "table" and type(saved.x) == "number" and type(saved.y) == "number" then
         root:SetPoint("CENTER", UIParent, "BOTTOMLEFT", saved.x * UIParent:GetWidth(), saved.y * UIParent:GetHeight())
@@ -1337,7 +1337,7 @@ local function positionAlert(root)
 end
 
 local function createAlert()
-    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH")
+    local root = window("GuildAvengerAlert", alertWidth, alertHeight, "HIGH")
     positionAlert(root)
     root:SetAlpha(alertAlpha)
     root:SetBackdropColor(0.40, 0.34, 0.28, 0.98)
@@ -1353,7 +1353,7 @@ local function createAlert()
         self:StopMovingOrSizing()
         alertMoving = false
         local x, y = self:GetCenter()
-        GrudgeBookDB.alertPosition = {
+        GuildAvengerDB.alertPosition = {
             x = (x - UIParent:GetLeft()) / UIParent:GetWidth(),
             y = (y - UIParent:GetBottom()) / UIParent:GetHeight(),
         }
@@ -1425,7 +1425,7 @@ function addon.ShowAlert(entry, preview)
     toast.priority:SetShown(entry.high == true)
     toast:Show()
     refreshAlertButtons()
-    local sound = GrudgeBookDB.sound
+    local sound = GuildAvengerDB.sound
     if preview or (sound[entry.kind] ~= false and (not sound.highOnly or entry.high)) then
         playAlertSound(entry.high)
     end

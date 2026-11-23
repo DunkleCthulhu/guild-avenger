@@ -21,7 +21,7 @@ local function isText(value)
 end
 
 local function say(message)
-    DEFAULT_CHAT_FRAME:AddMessage("|cffdf8278GrudgeBook|r " .. message)
+    DEFAULT_CHAT_FRAME:AddMessage("|cffdf8278Guild Avenger|r " .. message)
 end
 
 local cyrillicLower = {}
@@ -131,15 +131,15 @@ local function updateScope()
         return true
     end
     listID = id
-    local legacy = ForeverWatchDB and ForeverWatchDB[id]
-    if not GrudgeBookDB.lists[id] then
-        GrudgeBookDB.lists[id] = {}
-        importLegacy(GrudgeBookDB.lists[id], legacy, "P")
+    local legacy = GuildAvengerLegacyDB and GuildAvengerLegacyDB[id]
+    if not GuildAvengerDB.lists[id] then
+        GuildAvengerDB.lists[id] = {}
+        importLegacy(GuildAvengerDB.lists[id], legacy, "P")
     end
-    entries = GrudgeBookDB.lists[id]
-    if not GrudgeBookDB.guildsImported[id] then
+    entries = GuildAvengerDB.lists[id]
+    if not GuildAvengerDB.guildsImported[id] then
         importLegacy(entries, legacy, "G")
-        GrudgeBookDB.guildsImported[id] = true
+        GuildAvengerDB.guildsImported[id] = true
     end
     alerts, deaths, observedGuilds = {}, {}, {}
     for unit in pairs(plates) do
@@ -404,7 +404,7 @@ local function setPriority(entry, high)
 end
 
 local function removalLog()
-    local logs = GrudgeBookDB.removals
+    local logs = GuildAvengerDB.removals
     if not logs[listID] then logs[listID] = {} end
     return logs[listID]
 end
@@ -661,12 +661,12 @@ local function splitAdd(input)
 end
 
 local function showHelp()
-    say("/gb або /gb ui — відкрити книгу · /gb list — показати записи в чаті")
-    say("/gb add [Ім’я Прізвище] [Коментар] · /gb del [Ім’я Прізвище]")
-    say('/gb guild add ["Назва гільдії"] [Коментар] · /gb guild del [Назва гільдії]')
-    say("/gb share [Ім’я Прізвище] — гільдійцю · /gb share guild — у чат гільдії")
-    say("/gb test [high] — перевірити сповіщення · /gb download — посилання на GitHub")
-    say("/gb stats — журнал смертей і гільдійні рейтинги")
+    say("/gavenger або /gavenger ui — відкрити книгу · /gavenger list — показати записи в чаті")
+    say("/gavenger add [Ім’я Прізвище] [Коментар] · /gavenger del [Ім’я Прізвище]")
+    say('/gavenger guild add ["Назва гільдії"] [Коментар] · /gavenger guild del [Назва гільдії]')
+    say("/gavenger share [Ім’я Прізвище] — гільдійцю · /gavenger share guild — у чат гільдії")
+    say("/gavenger test [high] — перевірити сповіщення · /gavenger download — посилання на GitHub")
+    say("/gavenger stats — журнал смертей і гільдійні рейтинги")
 end
 
 local function slash(input)
@@ -687,7 +687,7 @@ local function slash(input)
         elseif operation == "del" or operation == "remove" then
             _, message = deleteEnemy(guild, "G")
         else
-            message = "/gb guild add [Назва], /gb guild del [Назва]"
+            message = "/gavenger guild add [Назва], /gavenger guild del [Назва]"
         end
     elseif command == "del" or command == "remove" then
         _, message = deleteEnemy(rest)
@@ -698,7 +698,7 @@ local function slash(input)
             _, message = addon.Share(rest)
         end
     elseif command == "test" then
-        addon.ShowAlert({ name = "GrudgeBook", note = "Тест сповіщення.", unit = "player",
+        addon.ShowAlert({ name = "Guild Avenger", note = "Тест сповіщення.", unit = "player",
             high = rest:lower() == "high" }, true)
     elseif command == "download" then
         addon.OpenDownload()
@@ -712,7 +712,7 @@ local function slash(input)
             say((entry.high and "[Високий] " or "[Звичайний] ") .. ("%s · смертей: %d"):format(name, entry.deaths))
         end
     else
-        message = "Невідома команда. Введіть /gb help."
+        message = "Невідома команда. Введіть /gavenger help."
     end
     if message then
         say(message)
@@ -721,16 +721,16 @@ end
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" and (...) == addonName then
-        GrudgeBookDB = GrudgeBookDB or {}
-        GrudgeBookDB.lists = GrudgeBookDB.lists or {}
-        GrudgeBookDB.guildsImported = GrudgeBookDB.guildsImported or {}
-        GrudgeBookDB.sound = GrudgeBookDB.sound or {}
-        GrudgeBookDB.removals = GrudgeBookDB.removals or {}
+        GuildAvengerDB = GuildAvengerDB or {}
+        GuildAvengerDB.lists = GuildAvengerDB.lists or {}
+        GuildAvengerDB.guildsImported = GuildAvengerDB.guildsImported or {}
+        GuildAvengerDB.sound = GuildAvengerDB.sound or {}
+        GuildAvengerDB.removals = GuildAvengerDB.removals or {}
         addon.InitSync()
         addon.InitStats()
         addon.InitMenus()
-        SLASH_GRUDGEBOOK1, SLASH_GRUDGEBOOK2 = "/gb", "/fw"
-        SlashCmdList.GRUDGEBOOK = slash
+        SLASH_GUILDAVENGER1 = "/gavenger"
+        SlashCmdList.GUILDAVENGER = slash
         C_Timer.NewTicker(1, scanPlates)
     elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_GUILD_UPDATE" or event == "INITIAL_CLUBS_LOADED" then
         updateScope()
