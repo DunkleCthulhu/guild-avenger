@@ -9,7 +9,16 @@ local roster, rosterScope, rosterRequestedAt = {}, nil, nil
 local sending, ticker, sequence = nil, nil, 0
 local incoming = {}
 local published, waiting = {}, {}
+local requestedLists, guildRequests = {}, {}
+local lastListRequest
+local requestLifetime = 300
+local requestCooldown = 60
 local makePackets, enqueue
+
+local function transferID()
+    sequence = sequence % 65535 + 1
+    return ("%x.%x"):format(GetServerTime(), sequence)
+end
 
 local function versionRank(value)
     local major, minor, patch = value:match("^(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)$")
@@ -191,7 +200,7 @@ function addon.Share(input, selection, includeRemovals)
     return true, L("transferStarted", member.name)
 end
 
-makePackets = function(selection, includeRemovals)
+makePackets = function(selection, includeRemovals, pullID)
     local entries = {}
     local removals = includeRemovals and not selection and addon.RemovalProposals() or {}
     for _, entry in ipairs(addon.Entries()) do
@@ -207,9 +216,10 @@ makePackets = function(selection, includeRemovals)
         return nil, L("tooManyEntries")
     end
 
-    sequence = sequence % 65535 + 1
-    local id = ("%x.%x"):format(GetServerTime(), sequence)
-    local packets = { ("B\t%s\t%d"):format(id, #entries), ("V\t%s\t%s"):format(id, version) }
+    local id = transferID()
+    local start = ("B\t%s\t%d"):format(id, #entries)
+    if pullID then start = start .. "\t" .. pullID end
+    local packets = { start, ("V\t%s\t%s"):format(id, version) }
     if #removals > 0 then
         packets[#packets + 1] = ("D\t%s\t%d"):format(id, #removals)
         for _, entry in ipairs(removals) do
@@ -233,12 +243,74 @@ enqueue = function(key, packets, quiet)
     local job = { scope = guildScope(), key = key, position = 1, packets = packets,
         progressAt = GetTime(), quiet = quiet }
     if sending then
-        if #waiting < 20 then
-            waiting[#waiting + 1] = job
-        end
+        if #waiting >= 20 then return false end
+        waiting[#waiting + 1] = job
     else
         sending = job
         ticker = C_Timer.NewTicker(0.25, sendNext)
+    end
+    return true
+end
+
+function addon.RequestWatchlists()
+    if not addon.UpdateScope() or not guildScope() then return false, L("sharingRequiresGuild") end
+    addon.RefreshRoster()
+    local scope, own, now = guildScope(), addon.UnitName("player"), GetTime()
+    if not addon.IsGuildMember(own) then return false, L("rosterLoading") end
+    if lastListRequest and lastListRequest.scope == scope and now - lastListRequest.at < requestCooldown then
+        return false, L("listRequestCooldown")
+    end
+    local id = transferID()
+    if C_ChatInfo.SendAddonMessage(prefix, "P\t" .. id, "GUILD") ~= results.Success then
+        return false, L("shareRequestFailed")
+    end
+    for key, request in pairs(requestedLists) do
+        if request.scope ~= scope or now - request.at >= requestLifetime then requestedLists[key] = nil end
+    end
+    lastListRequest = { scope = scope, at = now, received = {} }
+    requestedLists[id] = lastListRequest
+    return true, L("listRequestSent")
+end
+
+local function replyToListRequest(sender, id)
+    local request = guildRequests[sender]
+    local member = addon.IsGuildMember(sender) and roster[sender]
+    if not request or request.id ~= id or not member or not member.online or request.scope ~= guildScope()
+        or GetTime() - request.at >= requestLifetime then
+        return false, L("listRequestExpired")
+    end
+    if request.sent then return false, L("listRequestAlreadySent") end
+    local packets, errorMessage = makePackets(nil, false, id)
+    if not packets then return false, errorMessage end
+    if not enqueue(sender, packets) then return false, L("transferInProgress") end
+    request.sent = true
+    return true, L("transferStarted", member.name)
+end
+
+local function receiveListRequest(sender, id)
+    local member, scope, now = roster[sender], guildScope(), GetTime()
+    local request = guildRequests[sender]
+    if not member.online or (request and request.scope == scope
+        and (request.id == id or now - request.at < requestCooldown)) then return end
+
+    for key, previous in pairs(guildRequests) do
+        if now - previous.at >= requestLifetime or previous.scope ~= scope then guildRequests[key] = nil end
+    end
+    request = { id = id, scope = scope, at = now }
+    guildRequests[sender] = request
+    local function offerReply()
+        local link = ("|Haddon:GuildAvengerPull:%s:%s|h[%s]|h"):format(id, sender, L("replyToListRequest"))
+        addon.Say(L("guildmateRequestedList", member.name, link))
+    end
+    if GuildAvengerDB.replyToListRequests then
+        C_Timer.After(math.random(5, 30) / 10, function()
+            if guildScope() ~= scope or guildRequests[sender] ~= request or request.sent
+                or not addon.IsGuildMember(sender) then return end
+            if GuildAvengerDB.replyToListRequests and replyToListRequest(sender, id) then return end
+            offerReply()
+        end)
+    else
+        offerReply()
     end
 end
 
@@ -295,6 +367,14 @@ local function requestLink(_, link, _, mouseButton)
         addon.OpenDownload()
         return
     end
+    local pullID, requester = link:match("^addon:GuildAvengerPull:([%da-f]+%.[%da-f]+):([^:]+)$")
+    if pullID then
+        if addon.UpdateScope() then
+            local _, message = replyToListRequest(requester, pullID)
+            addon.Say(message)
+        end
+        return
+    end
     local id, sender = link:match("^addon:GuildAvenger:([%da-f]+%.[%da-f]+):([^:]+)$")
     if not id or #id > 16 or not addon.UpdateScope() or not guildScope() then
         return
@@ -331,26 +411,45 @@ local function finish(sender, batch)
         if entries[key] then return end
         entries[key] = record
     end
-    local added, updated, changes, removed = addon.Merge(entries, true, batch.explicit)
-    local planned = {}
-    for _, change in ipairs(changes or {}) do planned[change.key] = change end
-    addon.OfferImport(roster[sender].name, added, updated, changes or {}, function(selection)
-        if not addon.UpdateScope() or guildScope() ~= batch.scope or not addon.IsGuildMember(sender) then
-            addon.Say(L("importSenderLeft"))
-            return
+    local owner = batch.pull
+    if owner then
+        if owner.received[sender] then return end
+        owner.received[sender] = true
+    end
+    local function canImport()
+        return addon.UpdateScope() and guildScope() == batch.scope and addon.IsGuildMember(sender)
+    end
+    addon.OfferImport(roster[sender].name, function()
+        if not canImport() then return end
+        local added, updated, changes, removed = addon.Merge(entries, true, batch.explicit)
+        if owner and not next(changes or {}) then return end
+        local planned = {}
+        for _, change in ipairs(changes or {}) do planned[change.key] = change end
+        local function accept(selection)
+            if not canImport() then
+                addon.Say(L("importSenderLeft"))
+                return
+            end
+            local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, batch.explicit, planned)
+            addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
         end
-        local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, batch.explicit, planned)
-        addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
-    end, removed)
+        return { added = added, updated = updated, changes = changes or {}, accept = accept, removed = removed }
+    end, owner ~= nil)
 end
 
 function addon.Receive(receivedPrefix, message, channel, senderName)
-    if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix or not addon.IsText(channel) or channel ~= "WHISPER"
+    if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix or not addon.IsText(channel)
+        or (channel ~= "WHISPER" and channel ~= "GUILD")
         or not addon.IsText(message) or #message > 240 or not addon.UpdateScope() then
         return
     end
     local sender = addon.PlayerName(senderName, true)
     if not sender or sender == addon.UnitName("player") or not addon.IsGuildMember(sender) then
+        return
+    end
+    if channel == "GUILD" then
+        local id = message:match("^P\t([%da-f]+%.[%da-f]+)$")
+        if id and #id <= 16 then receiveListRequest(sender, id) end
         return
     end
     local requestID = message:match("^Q\t([%da-f]+%.[%da-f]+)$")
@@ -369,7 +468,13 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     end
     local now = GetTime()
     if operation == "B" then
-        local count = data:match("^%d+$") and tonumber(data)
+        local number, pullID = data:match("^(%d+)\t([%da-f]+%.[%da-f]+)$")
+        local owner = pullID and requestedLists[pullID]
+        if pullID and (not owner or owner.scope ~= guildScope()
+            or now - owner.at >= requestLifetime or owner.received[sender] or not roster[sender].online) then
+            return
+        end
+        local count = tonumber(number or data:match("^%d+$"))
         if not count or count > maxEntries then
             return
         end
@@ -379,7 +484,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
             end
         end
         incoming[sender] = { id = id, count = count, ready = 0, records = {}, progressAt = now, scope = guildScope(),
-            removals = {}, removalCount = 0 }
+            removals = {}, removalCount = 0, pull = owner }
         return
     end
     local batch = incoming[sender]
@@ -399,7 +504,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     end
     if operation == "D" then
         local count = data:match("^%d+$") and tonumber(data)
-        if batch.explicit and not batch.expectedRemovals and not next(batch.records)
+        if not batch.pull and batch.explicit and not batch.expectedRemovals and not next(batch.records)
             and count and count > 0 and batch.count + count <= maxEntries then
             batch.expectedRemovals, batch.progressAt = count, now
         end

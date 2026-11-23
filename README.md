@@ -52,6 +52,7 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger guild del Guild Name` | Remove a guild. |
 | `/gavenger share Character Name` | Offer a list to a guildmate. With no arguments, use the current target. |
 | `/gavenger share guild` | Post a link to the full watchlist in guild chat. |
+| `/gavenger request` | Ask online guildmates for their watchlists. |
 | `/gavenger test` or `/gavenger test high` | Preview the normal- or high-priority alert and play its sound. |
 | `/gavenger download` | Open a window with a copyable GitHub link. |
 | `/gavenger help` | Show command help. |
@@ -66,14 +67,17 @@ A guild chat post includes a GitHub link for installing or updating the addon. G
 
 Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Recipients can review new entries, proposed note or priority changes, and proposed removals. They must select the proposed changes or removals before accepting them. When sharing the full list, enable **Suggest removed entries** (**Запропонувати вилучені записи**) to include entries you removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
 
+Starting with 3.2.0, **Request guild watchlists** asks online guildmates running 3.2.0 or later for their lists. They can send their list from the request link in chat or opt in to automatic replies in **Settings**. Replies include current characters, guilds, notes, priorities, and death counts. Review each reply and choose which entries to import. Replies that add nothing to your watchlist are skipped.
+
 ## Statistics
 
 - **My Deaths** (**Мої смерті**) keeps up to 100 of your character's recent deaths, with time, zone, and coordinates when WoW provides them. The attacker appears if the death recap shows a confirmed killing blow.
-- **Avengers** (**Месники**) ranks killing blows dealt by guildmates or their active pets to characters and guild members on their watchlists. A kill that matches both a character and a guild entry gives one point in the ranking.
+- **Avengers** (**Месники**) ranks Honor awarded for kills against each guildmate’s watchlist. Healers and other party members get credit when WoW awards them Honor for the same kill. An enemy on both the character and guild lists counts once. An award has to name a recognizable enemy. For guild-only matches, the addon needs to have seen that enemy’s guild.
+- **Killing blows** (**Останні удари**) keeps the earlier ranking and counts final hits by guildmates or their active pets against watchlist entries. An enemy that matches both a character and a guild entry gives one killing blow in the ranking.
 - **Enemies** (**Вороги**) ranks the enemies with the most confirmed killing blows against guildmates who share their statistics. It groups reports by enemy character ID and keeps the highest reported total from each guildmate.
 - In **Enemies**, click **Add to watchlist** (**До книги**) to add a ranked enemy. If WoW cannot identify the character yet, the entry waits for the next encounter to confirm the name and faction. A confirmed enemy's alert shows their known number of guildmate kills.
-- **Avengers** has all-time and current-week views. Weekly tracking starts in version 2.4.0 and resets every Monday at 00:00 UTC. All-time totals carry over.
-- Enable **Share summaries with the guild** (**Ділитися підсумками з гільдією**) to send your totals to guildmates. **Refresh rankings** (**Оновити рейтинг**) fetches summaries from online members who have sharing enabled. Your journal and the times and coordinates of individual deaths stay local. Ranking sync requires Guild Avenger 3.0.0 or later.
+- **Avengers** and **Killing blows** both have all-time and current-week views. Honor tracking starts in 3.2.0. Earlier killing blow totals carry over. Weekly totals reset every Monday at 00:00 UTC.
+- Enable **Share summaries with the guild** (**Ділитися підсумками з гільдією**) to send your totals to guildmates. **Refresh rankings** (**Оновити рейтинг**) fetches summaries from online members who have sharing enabled. Your journal and the times and coordinates of individual deaths stay local. Honor sync requires Guild Avenger 3.2.0 or later. Killing blow and enemy totals can still sync with versions 3.0.0 and later.
 
 ## Contributing
 

@@ -39,6 +39,10 @@ local function weeklyKills(score, week)
     return score.week == week and score.weeklyKills or 0
 end
 
+local function weeklyHonor(score, week)
+    return score.honorWeek == week and score.weeklyHonor or 0
+end
+
 function addon.InitStats()
     GuildAvengerDB.stats = GuildAvengerDB.stats or { journals = {}, guilds = {} }
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
@@ -58,6 +62,17 @@ function addon.RecordRevenge()
     score.weeklyKills = math.min(maxCount, weeklyKills(score, week) + 1)
     score.week = week
     addon.RefreshStats()
+end
+
+function addon.RecordHonor(amount)
+    local score = ownScore()
+    if not score then return end
+    local week = currentWeek()
+    score.honor = math.min(maxCount, (score.honor or 0) + amount)
+    score.weeklyHonor = math.min(maxCount, weeklyHonor(score, week) + amount)
+    score.honorWeek = week
+    addon.RefreshStats()
+    return true
 end
 
 local function journal()
@@ -165,12 +180,15 @@ local function publish()
     local score, scope, key = ownScore()
     if sendTicker or not score or not score.share or not addon.IsGuildMember(key) then return end
     local packets = { ("R\t%d"):format(score.kills) }
-    for guid, enemy in pairs(score.enemies) do
-        packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
-    end
     local week = currentWeek()
     if weeklyKills(score, week) > 0 then
         packets[#packets + 1] = ("W\t%d\t%d"):format(week, score.weeklyKills)
+    end
+    if score.honor and score.honor > 0 then
+        packets[#packets + 1] = ("H\t%d\t%d\t%d"):format(score.honor, week, weeklyHonor(score, week))
+    end
+    for guid, enemy in pairs(score.enemies) do
+        packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
     end
     local index, progressAt = 1, GetTime()
     local function stop()
@@ -233,10 +251,14 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     local kills = tonumber(message:match("^R\t(%d+)$"))
     local week, weekly = message:match("^W\t(%d+)\t(%d+)$")
     week, weekly = tonumber(week), tonumber(weekly)
-    local validWeek = week == currentWeek() and weekly and weekly > 0 and weekly <= maxCount
+    local current = currentWeek()
+    local validWeek = week == current and weekly and weekly > 0 and weekly <= maxCount
+    local honor, honorWeek, honorThisWeek = message:match("^H\t(%d+)\t(%d+)\t(%d+)$")
+    honor, honorWeek, honorThisWeek = tonumber(honor), tonumber(honorWeek), tonumber(honorThisWeek)
+    local validHonor = honor and honor > 0 and honor <= maxCount and honorThisWeek <= honor and honorWeek <= current
     local guid, amount, enemy = message:match("^E\t([^\t]+)\t(%d+)\t([^\t]+)$")
     guid, amount, enemy = playerGUID(guid), tonumber(amount), addon.Clean(enemy, addon.NameLimit)
-    if not (kills and kills <= maxCount) and not validWeek
+    if not (kills and kills <= maxCount) and not validWeek and not validHonor
         and not (guid and amount and amount > 0 and amount <= maxCount and enemy and enemy ~= "") then
         return
     end
@@ -248,6 +270,12 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     elseif validWeek then
         peer.weeklyKills = math.max(weeklyKills(peer, week), weekly)
         peer.week = week
+    elseif validHonor then
+        peer.honor = math.max(peer.honor or 0, honor)
+        if honorWeek == current then
+            peer.weeklyHonor = math.max(weeklyHonor(peer, current), honorThisWeek)
+            peer.honorWeek = current
+        end
     else
         local previous = peer.enemies[guid]
         if not previous or amount >= previous.count then peer.enemies[guid] = { name = enemy, count = amount } end
@@ -294,8 +322,13 @@ function addon.StatsRows(tab, weekly)
     local rows, enemies = {}, {}
     local week = currentWeek()
     eachScore(function(score, name)
-        if tab == 2 then
-            local count = weekly and weeklyKills(score, week) or score.kills
+        if tab == 2 or tab == 4 then
+            local count
+            if tab == 2 then
+                count = weekly and weeklyHonor(score, week) or (score.honor or 0)
+            else
+                count = weekly and weeklyKills(score, week) or score.kills
+            end
             if count > 0 then rows[#rows + 1] = { name = name, count = count } end
         elseif tab == 3 then
             for guid, enemy in pairs(score.enemies) do

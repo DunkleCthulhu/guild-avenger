@@ -264,6 +264,37 @@ local function matchGuild(unit, key, faction, guid)
     return guild
 end
 
+function addon.IsHonorTarget(victim)
+    local key = playerName(victim, true)
+    if not key or not entries or isAllyName(key) then return false end
+
+    local personal = entries[key]
+    if personal and not personal.pending and isDifferentFaction(personal.faction) then return true end
+
+    local function matches(unit)
+        local observed, _, faction, guid = enemyUnit(unit, true)
+        if observed == key then
+            return personal ~= nil or matchGuild(unit, key, faction, guid) ~= nil
+        end
+    end
+    for _, unit in ipairs({ "target", "mouseover", "focus" }) do
+        local match = matches(unit)
+        if match ~= nil then return match end
+    end
+    for unit in pairs(plates) do
+        local match = matches(unit)
+        if match ~= nil then return match end
+    end
+    local now = GetTime()
+    for _, observation in pairs(observedGuilds) do
+        if observation.player == key and now - observation.at <= guildObservationLifetime
+            and entries[observation.guild] and isDifferentFaction(observation.faction) then
+            return true
+        end
+    end
+    return false
+end
+
 local function warn(key, entry, player, unit, guid)
     local now = GetTime()
     if alerts[key] and now - alerts[key] < cooldown then
@@ -664,6 +695,7 @@ local function showHelp()
     say(L("helpCharacters"))
     say(L("helpGuilds"))
     say(L("helpSharing"))
+    say(L("helpRequestLists"))
     say(L("helpAlerts"))
     say(L("helpStats"))
     say(L("helpSettings"))
@@ -697,6 +729,8 @@ local function slash(input)
         else
             _, message = addon.Share(rest)
         end
+    elseif command == "request" then
+        _, message = addon.RequestWatchlists()
     elseif command == "test" then
         addon.ShowAlert({ name = "Guild Avenger", note = L("testAlert"), unit = "player",
             high = rest:lower() == "high" }, true)
@@ -763,6 +797,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PARTY_KILL" then
         local killer, victim = ...
         recordDeath(victim, killer)
+    elseif event == "CHAT_MSG_COMBAT_HONOR_GAIN" then
+        local message = ...
+        addon.OnHonorGain(message, select(11, ...))
     elseif event == "PLAYER_DEAD" then
         addon.RecordOwnDeath()
     elseif event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
@@ -796,7 +833,7 @@ for _, event in ipairs({
     "ADDON_LOADED", "PLAYER_ENTERING_WORLD", "PLAYER_LEAVING_WORLD", "PLAYER_GUILD_UPDATE",
     "INITIAL_CLUBS_LOADED", "GUILD_ROSTER_UPDATE", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_COMBAT", "UNIT_DIED", "PARTY_KILL",
-    "UNIT_HEALTH", "CHAT_MSG_ADDON", "PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST",
+    "UNIT_HEALTH", "CHAT_MSG_ADDON", "CHAT_MSG_COMBAT_HONOR_GAIN", "PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST",
 }) do
     frame:RegisterEvent(event)
 end

@@ -218,6 +218,7 @@ function addon.RefreshUI()
     panel.note:SetEnabled(ready)
     enabled(panel.submit, ready)
     enabled(panel.share, ready and scope ~= "local")
+    enabled(panel.pull, ready and scope ~= "local")
     panel.share.label:SetText(selected > 0 and L("shareCount", selected) or L("shareWatchlist"))
     panel.clearSelection:SetShown(selected > 0)
     updateAddLabels()
@@ -373,7 +374,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 165, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 235, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -385,6 +386,16 @@ function addon.PromptSettings()
         message:SetPoint("TOPLEFT", 20, -92)
         message:SetPoint("TOPRIGHT", -20, -92)
         message:SetJustifyH("LEFT")
+
+        local reply = checkbox(root, 17, -116, L("autoShareWatchlist"))
+        reply:SetScript("OnClick", function(self)
+            GuildAvengerDB.replyToListRequests = self:GetChecked() and true or nil
+        end)
+        local hint = label(root, "GameFontHighlightSmall", color.muted, L("autoShareWatchlistHint"))
+        hint:SetPoint("TOPLEFT", 20, -145)
+        hint:SetPoint("TOPRIGHT", -20, -145)
+        hint:SetJustifyH("LEFT")
+        hint:SetMaxLines(2)
 
         local selected = addon.Language()
         local apply = button(root, L("applyLanguage"), 235, function()
@@ -401,6 +412,7 @@ function addon.PromptSettings()
             selected = addon.Language()
             dropdown:GenerateMenu()
             enabled(apply, false)
+            reply:SetChecked(GuildAvengerDB.replyToListRequests == true)
             status(message, true, L("languageHint"))
         end)
         dropdown:SetupMenu(function(_, menu)
@@ -627,7 +639,12 @@ local function createPanel()
     root.scroll:SetScript("OnValueChanged", renderRows)
     root.soundSettings = button(root, L("sounds"), 96, addon.PromptSounds)
     root.soundSettings:SetPoint("TOPLEFT", 20, -554)
-    button(root, L("statistics"), 110, function() addon.OpenStats() end):SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
+    local statsButton = button(root, L("statistics"), 110, function() addon.OpenStats() end)
+    statsButton:SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
+    root.pull = button(root, L("requestWatchlists"), 184, function()
+        status(root.status, addon.RequestWatchlists())
+    end)
+    root.pull:SetPoint("LEFT", statsButton, "RIGHT", 8, 0)
     root.share = button(root, L("shareWatchlist"), 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
     root.clearSelection = button(root, L("clearSelection"), 105, function()
@@ -693,11 +710,12 @@ function addon.RefreshStats()
         elseif record then
             row.name:SetText(("%d.  %s"):format(position, record.name))
             row.count:SetText(tostring(record.count))
-            row.detail:SetText(tab == 2 and L("avengerKillingBlows") or L("enemyKillingBlows"))
+            local detail = tab == 2 and "avengerHonor" or (tab == 4 and "avengerKillingBlows" or "enemyKillingBlows")
+            row.detail:SetText(L(detail))
         end
     end
     root.empty:SetShown(#rows == 0)
-    root.week:SetShown(tab == 2)
+    root.week:SetShown(tab == 2 or tab == 4)
     root.week.label:SetText(root.weekly and L("thisWeek") or L("allTime"))
     root.pagination:SetText(("%d / %d"):format(root.page, pages))
     enabled(root.back, root.page > 1)
@@ -718,7 +736,7 @@ local function createStats()
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
-    local titles = { L("myDeaths"), L("avengers"), L("enemies") }
+    local titles = { L("myDeaths"), L("avengers"), L("enemies"), L("killingBlows") }
     for index, title in ipairs(titles) do
         local tab = CreateFrame("Button", nil, root, "PanelTopTabButtonTemplate")
         root.Tabs[index] = tab
@@ -772,7 +790,7 @@ local function createStats()
         root.page = 1
         addon.RefreshStats()
     end)
-    root.week:SetPoint("TOPRIGHT", -20, -53)
+    root.week:SetPoint("TOPRIGHT", -20, -407)
     root.back = button(root, L("previous"), 73, function() root.page = root.page - 1; addon.RefreshStats() end)
     root.back:SetPoint("TOPLEFT", 20, -407)
     root.pagination = label(root, "GameFontHighlightSmall", color.muted)
@@ -1228,11 +1246,17 @@ local function createReview()
 end
 
 presentOffer = function()
-    if #offers == 0 or (dialog and dialog:IsShown()) or (review and review:IsShown()) then
+    if (dialog and dialog:IsShown()) or (review and review:IsShown()) then
         return
     end
+    local offer
+    while #offers > 0 and not offer do
+        local queued = table.remove(offers, 1)
+        offer = queued.preview()
+        if offer then offer.sender = queued.sender end
+    end
+    if not offer then return end
     if not review then review = createReview() end
-    local offer = table.remove(offers, 1)
     table.sort(offer.changes, function(left, right) return left.record.name < right.record.name end)
     offer.selected = {}
     review.offer = offer
@@ -1247,11 +1271,19 @@ presentOffer = function()
     review:Show()
 end
 
-function addon.OfferImport(sender, added, updated, changes, accept, removed)
-    if #offers < 10 then
-        offers[#offers + 1] = { sender = sender, added = added, updated = updated, changes = changes, accept = accept, removed = removed }
-        presentOffer()
+function addon.OfferImport(sender, preview, pulled)
+    local directCount = 0
+    local offer = { sender = sender, preview = preview, pulled = pulled }
+    for index, queued in ipairs(offers) do
+        if pulled and queued.pulled and queued.sender == sender then
+            offers[index] = offer
+            return
+        end
+        if not queued.pulled then directCount = directCount + 1 end
     end
+    if not pulled and directCount >= 10 then return end
+    offers[#offers + 1] = offer
+    presentOffer()
 end
 
 local menusRegistered
