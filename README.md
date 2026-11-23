@@ -10,7 +10,7 @@ Extract the Guild Avenger release ZIP into `World of Warcraft/_forever_/Interfac
 
 ### Interface language
 
-Starting with 3.1.0, open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. Choose **English** or **Українська** and click **Apply and reload UI**. Upgrades from earlier versions start in Ukrainian. Fresh installs start in English unless WoW reports a Ukrainian locale. Your choice is saved between sessions.
+Starting with 3.1.0, open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. In 3.1.1, the button is in the upper-right corner next to the close button. Choose **English** or **Українська** and click **Apply and reload UI**. Upgrades from earlier versions start in Ukrainian. Fresh installs start in English unless WoW reports a Ukrainian locale. Your choice is saved between sessions.
 
 ### Migrating from GrudgeBook or Forever Watch
 
