@@ -638,13 +638,16 @@ function addon.InitMenus()
     end
 end
 
-local alertName, expiration, targetButton, skullButton
-local alertWidth, alertOffset = 458, 105
+local alertName, expiration, targetButton, pingButton
+local alertMoving = false
+local alertWidth, alertHeight, alertAlpha = 250, 72, 0.84
 
-local function secured(labelText, width, x)
+local function secured(labelText, width)
     local control = button(UIParent, labelText, width, nil, true,
         "SecureActionButtonTemplate,SecureHandlerStateTemplate")
-    control:SetPoint("CENTER", UIParent, "CENTER", x, alertOffset - 43)
+    control:SetHeight(18)
+    control:SetAlpha(alertAlpha)
+    control.label:SetFontObject(GameFontHighlightSmall)
     control:SetFrameStrata("HIGH")
     control:SetFrameLevel(toast:GetFrameLevel() + 4)
     control:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
@@ -655,70 +658,126 @@ local function secured(labelText, width, x)
     return control
 end
 
+local function positionAlertButton(control, x, y)
+    control:ClearAllPoints()
+    control:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
+end
+
 local function refreshAlertButtons()
     if InCombatLockdown() then
         return
     end
-    if not alertName then
+    local left, bottom = toast:GetLeft(), toast:GetBottom()
+    if not alertName or alertMoving or not left or not bottom then
         if targetButton then
             targetButton:Hide()
-            skullButton:Hide()
+            if pingButton then
+                pingButton:Hide()
+            end
         end
         return
     end
     if not targetButton then
         -- Siblings keep the visual alert dismissible while protected buttons are locked.
-        targetButton = secured("У ціль", 78, 78)
+        targetButton = secured("У ціль", 55)
         targetButton:SetAttribute("type", "macro")
-        skullButton = secured("Череп", 78, 167)
-        skullButton:SetAttribute("type", "raidtarget")
-        skullButton:SetAttribute("unit", "target")
-        skullButton:SetAttribute("marker", 8)
-        skullButton:SetAttribute("action", "set")
+        if C_Ping and C_Ping.IsPingSystemEnabled then
+            pingButton = secured("Пінг небезпеки", 103)
+            pingButton:SetAttribute("type", "macro")
+            -- The numeric Warning option works in any client language.
+            pingButton:SetAttribute("macrotext", "/ping [@target,harm,nodead] 2")
+        end
     end
+    local right = left - UIParent:GetLeft() + alertWidth
+    local y = bottom - UIParent:GetBottom() + 5
+    positionAlertButton(targetButton, right - 170, y)
     targetButton:SetAttribute("macrotext", "/targetexact " .. alertName)
     targetButton:Show()
-    local key = addon.PlayerName(alertName)
-    skullButton:SetShown(key ~= nil and key == addon.EnemyUnit("target"))
+    if pingButton then
+        positionAlertButton(pingButton, right - 110, y)
+        local key = addon.PlayerName(alertName)
+        pingButton:SetShown(C_Ping.IsPingSystemEnabled() and key ~= nil and key == addon.EnemyUnit("target"))
+    end
 end
 
-function addon.CloseAlert()
-    alertName = nil
+local function cancelAlertTimer()
     if expiration then
         expiration:Cancel()
         expiration = nil
     end
+end
+
+function addon.CloseAlert()
+    alertName = nil
+    cancelAlertTimer()
     if toast then
         toast:Hide()
         refreshAlertButtons()
     end
 end
 
-local function createAlert()
-    local root = window("GrudgeBookAlert", alertWidth, 132, "HIGH")
+local function positionAlert(root)
+    local saved = GrudgeBookDB.alertPosition
     root:ClearAllPoints()
-    root:SetPoint("CENTER", UIParent, "CENTER", 0, alertOffset)
+    if type(saved) == "table" and type(saved.x) == "number" and type(saved.y) == "number" then
+        root:SetPoint("CENTER", UIParent, "BOTTOMLEFT", saved.x * UIParent:GetWidth(), saved.y * UIParent:GetHeight())
+    else
+        root:SetPoint("TOP", UIParent, "TOP", 0, -42)
+    end
+end
+
+local function createAlert()
+    local root = window("GrudgeBookAlert", alertWidth, alertHeight, "HIGH")
+    positionAlert(root)
+    root:SetAlpha(alertAlpha)
+    root:SetMovable(true)
+    root:RegisterForDrag("LeftButton")
+    root:SetScript("OnDragStart", function(self)
+        alertMoving = true
+        cancelAlertTimer()
+        refreshAlertButtons()
+        self:StartMoving()
+    end)
+    root:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        alertMoving = false
+        local x, y = self:GetCenter()
+        GrudgeBookDB.alertPosition = {
+            x = (x - UIParent:GetLeft()) / UIParent:GetWidth(),
+            y = (y - UIParent:GetBottom()) / UIParent:GetHeight(),
+        }
+        positionAlert(self)
+        refreshAlertButtons()
+        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+    end)
     local stripe = root:CreateTexture(nil, "ARTWORK")
     stripe:SetPoint("TOPLEFT", 1, -1)
     stripe:SetPoint("BOTTOMLEFT", 1, 1)
-    stripe:SetWidth(5)
+    stripe:SetWidth(3)
     stripe:SetColorTexture(unpack(color.red))
-    root.heading = label(root, "GameFontHighlightSmall", color.red)
-    root.heading:SetPoint("TOPLEFT", 17, -12)
-    root.name = label(root, "GameFontNormalHuge", color.red)
-    root.name:SetPoint("TOPLEFT", 17, -29)
-    root.name:SetWidth(400)
+    root.name = label(root, "GameFontNormal", color.red)
+    root.name:SetPoint("TOPLEFT", 10, -7)
+    root.name:SetWidth(215)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
-    root.note = label(root, "GameFontHighlight", color.white)
-    root.note:SetPoint("TOPLEFT", 17, -60)
-    root.note:SetWidth(419)
+    root.note = label(root, "GameFontHighlightSmall", color.white)
+    root.note:SetPoint("TOPLEFT", 10, -23)
+    root.note:SetWidth(230)
     root.note:SetJustifyH("LEFT")
     root.note:SetMaxLines(2)
-    button(root, "×", 26, addon.CloseAlert):SetPoint("TOPRIGHT", -10, -9)
+    local close = button(root, "×", 17, addon.CloseAlert)
+    close:SetHeight(17)
+    close:SetPoint("TOPRIGHT", -5, -5)
     root:RegisterEvent("PLAYER_REGEN_ENABLED")
     root:RegisterEvent("PLAYER_TARGET_CHANGED")
-    root:SetScript("OnEvent", refreshAlertButtons)
+    root:RegisterEvent("DISPLAY_SIZE_CHANGED")
+    root:RegisterEvent("UI_SCALE_CHANGED")
+    root:SetScript("OnEvent", function(self, event)
+        if not alertMoving and (event == "DISPLAY_SIZE_CHANGED" or event == "UI_SCALE_CHANGED") then
+            positionAlert(self)
+        end
+        refreshAlertButtons()
+    end)
     return root
 end
 
@@ -726,15 +785,14 @@ function addon.ShowAlert(entry, preview)
     if not toast then
         toast = createAlert()
     end
-    if expiration then
-        expiration:Cancel()
-    end
+    cancelAlertTimer()
     alertName = not preview and entry.name or nil
-    toast.heading:SetText(preview and "ПЕРЕВІРКА ТРИВОГИ" or "GRUDGEBOOK / ВОРОГ ПОРУЧ")
     toast.name:SetText(entry.name)
     toast.note:SetText(entry.note)
     toast:Show()
     refreshAlertButtons()
     PlaySound(SOUNDKIT.RAID_WARNING, "Master")
-    expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+    if not alertMoving then
+        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+    end
 end
