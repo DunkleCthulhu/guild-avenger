@@ -91,6 +91,12 @@ local function metadata(entry)
     return author
 end
 
+local function selectionSize(selection)
+    local count = 0
+    for _ in pairs(selection) do count = count + 1 end
+    return count
+end
+
 local function renderRows()
     local slider = panel.scroll
     local offset = math.floor(slider:GetValue())
@@ -99,10 +105,14 @@ local function renderRows()
         row.entry = entry
         row:SetShown(entry ~= nil)
         if entry then
+            local key = addon.EntryName(entry.name, entry.kind)
+            row.check:SetChecked(panel.selected[key] == true)
             row.name:SetText(entry.kind == "G" and "Гільдія: " .. entry.name or entry.name)
             row.note:SetText(entry.note)
             row.metadata:SetText(metadata(entry))
             row.deaths:SetText(entry.kind == "G" and "-" or ("%d"):format(entry.deaths))
+            row.priority.label:SetText(entry.high and "Високий" or "Звичайний")
+            row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
         end
     end
 end
@@ -114,17 +124,28 @@ function addon.RefreshUI()
     local scope = addon.Scope()
     if panel.scope ~= scope then
         panel.scope, panel.editing = scope, nil
+        panel.selected = {}
         panel.name:SetText("")
         panel.note:SetText("")
         panel.scroll:SetValue(0)
     end
     panel.entries = addon.Entries()
+    local present = {}
+    for _, entry in ipairs(panel.entries) do
+        present[addon.EntryName(entry.name, entry.kind)] = true
+    end
+    for key in pairs(panel.selected) do
+        if not present[key] then panel.selected[key] = nil end
+    end
+    local selected = selectionSize(panel.selected)
     panel.count:SetText(("Записів у книзі: %d"):format(#panel.entries))
     local ready = scope ~= nil
     panel.name:SetEnabled(ready and not panel.editing)
     panel.note:SetEnabled(ready)
     enabled(panel.submit, ready)
     enabled(panel.share, ready and scope ~= "local")
+    panel.share.label:SetText(selected > 0 and ("Поділитися (%d)"):format(selected) or "Поділитися переліком")
+    panel.clearSelection:SetShown(selected > 0)
     panel.submit.label:SetText(panel.editing and "Зберегти" or "Додати")
     panel.cancel:SetShown(panel.editing ~= nil)
     panel.guild:SetShown(not panel.editing)
@@ -185,10 +206,22 @@ local function submit()
     status(panel.status, ok, message)
 end
 
+local function soundOption(parent, x, title, key, checkedByDefault)
+    local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    check:SetSize(23, 23)
+    check:SetPoint("TOPLEFT", x, -561)
+    label(check, "GameFontHighlightSmall", color.white, title):SetPoint("LEFT", check, "RIGHT", 1, 0)
+    local value = GrudgeBookDB.sound[key]
+    check:SetChecked(value == true or (value == nil and checkedByDefault))
+    check:SetScript("OnClick", function(self)
+        GrudgeBookDB.sound[key] = self:GetChecked() == true
+    end)
+end
+
 local function createPanel()
-    local root = window("GrudgeBookPanel", 604, 608, "DIALOG")
+    local root = window("GrudgeBookPanel", 662, 635, "DIALOG")
     root:SetMovable(true)
-    root.rows, root.entries = {}, {}
+    root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GrudgeBookPanel")
     local header = CreateFrame("Frame", nil, root)
     header:SetPoint("TOPLEFT", 20, -12)
@@ -204,12 +237,12 @@ local function createPanel()
     button(root, "×", 27, function() root:Hide() end):SetPoint("TOPRIGHT", -17, -15)
 
     label(root, "GameFontHighlightSmall", color.muted, "Повне ім’я персонажа"):SetPoint("TOPLEFT", 20, -57)
-    root.name = input(root, 464, addon.NameLimit)
+    root.name = input(root, 522, addon.NameLimit)
     root.name:SetPoint("TOPLEFT", 20, -74)
     root.submit = button(root, "Додати", 92, submit, true)
     root.submit:SetPoint("LEFT", root.name, "RIGHT", 8, 0)
     label(root, "GameFontHighlightSmall", color.muted, "Коментар (необов’язково)"):SetPoint("TOPLEFT", 20, -116)
-    root.note = input(root, 464, addon.NoteLimit)
+    root.note = input(root, 522, addon.NoteLimit)
     root.note:SetPoint("TOPLEFT", 20, -133)
     root.cancel = button(root, "Скасувати", 92, function()
         resetForm()
@@ -240,23 +273,35 @@ local function createPanel()
         row:SetPoint("TOPRIGHT", -16, -2 - (index - 1) * rowHeight)
         row:SetHeight(rowHeight - 1)
         fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+        row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        row.check:SetSize(24, 24)
+        row.check:SetPoint("LEFT", 5, 0)
+        row.check:SetScript("OnClick", function(self)
+            local key = addon.EntryName(row.entry.name, row.entry.kind)
+            root.selected[key] = self:GetChecked() and true or nil
+            addon.RefreshUI()
+        end)
         row.name = label(row, "GameFontHighlight", color.white)
-        row.name:SetPoint("TOPLEFT", 9, -5)
+        row.name:SetPoint("TOPLEFT", 34, -5)
         row.name:SetWidth(286)
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
         row.note = label(row, "GameFontHighlightSmall", color.muted)
-        row.note:SetPoint("TOPLEFT", 9, -20)
+        row.note:SetPoint("TOPLEFT", 34, -20)
         row.note:SetWidth(286)
         row.note:SetJustifyH("LEFT")
         row.note:SetWordWrap(false)
         row.metadata = label(row, "GameFontHighlightSmall", color.muted)
-        row.metadata:SetPoint("TOPLEFT", 9, -34)
+        row.metadata:SetPoint("TOPLEFT", 34, -34)
         row.metadata:SetWidth(286)
         row.metadata:SetJustifyH("LEFT")
         row.metadata:SetWordWrap(false)
         row.deaths = label(row, "GameFontNormalLarge", color.gold)
         row.deaths:SetPoint("RIGHT", -183, 0)
+        row.priority = button(row, "", 85, function()
+            addon.SetPriority(row.entry, not row.entry.high)
+        end)
+        row.priority:SetPoint("RIGHT", -220, 0)
         local remove = button(row, "Вилучити", 75, function()
             local entry = row.entry
             if panel.editing == entry then
@@ -275,7 +320,8 @@ local function createPanel()
         end):SetPoint("RIGHT", remove, "LEFT", -6, 0)
         root.rows[index] = row
     end
-    label(root, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("TOPLEFT", 339, -175)
+    label(root, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("TOPLEFT", 338, -175)
+    label(root, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("TOPLEFT", 405, -175)
     root.scroll = CreateFrame("Slider", nil, list)
     root.scroll:SetPoint("TOPRIGHT", -3, -3)
     root.scroll:SetPoint("BOTTOMRIGHT", -3, 3)
@@ -291,11 +337,20 @@ local function createPanel()
     thumb:SetColorTexture(unpack(color.gold))
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderRows)
+    label(root, "GameFontHighlightSmall", color.muted, "Звук"):SetPoint("TOPLEFT", 20, -567)
+    soundOption(root, 62, "Персонажі", "P", true)
+    soundOption(root, 160, "Гільдії", "G", true)
+    soundOption(root, 235, "Лише високий пріоритет", "highOnly", false)
     root.share = button(root, "Поділитися переліком", 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
+    root.clearSelection = button(root, "Зняти вибір", 105, function()
+        root.selected = {}
+        addon.RefreshUI()
+    end)
+    root.clearSelection:SetPoint("RIGHT", root.share, "LEFT", -7, 0)
     root.status = label(root, "GameFontHighlightSmall", color.muted)
     root.status:SetPoint("BOTTOMLEFT", 20, 23)
-    root.status:SetWidth(390)
+    root.status:SetWidth(340)
     root.status:SetJustifyH("LEFT")
     root.status:SetMaxLines(2)
     root:SetScript("OnShow", addon.RefreshUI)
@@ -385,7 +440,7 @@ local function createDialog()
     root.cancel = button(root, "", 98, function() root:Hide() end)
     root.cancel:SetPoint("RIGHT", root.confirm, "LEFT", -7, 0)
     root.publish = button(root, "У чат гільдії", 125, function()
-        local ok, message = addon.Publish()
+        local ok, message = root.publishAction()
         if ok then
             root:Hide()
             addon.Say(message)
@@ -396,6 +451,7 @@ local function createDialog()
     root.publish:SetPoint("BOTTOMLEFT", 18, 13)
     root:SetScript("OnHide", function()
         root.action = nil
+        root.publishAction = nil
         root.field:ClearFocus()
         C_Timer.After(0, presentOffer)
     end)
@@ -426,6 +482,7 @@ local function openDialog(options)
     dialog.field:SetText(options.value or "")
     status(dialog.status, true, "")
     dialog.action = options.action
+    dialog.publishAction = options.publishAction
     dialog:Show()
     addon.RefreshSuggestions()
     if options.limit then
@@ -436,12 +493,28 @@ end
 
 function addon.PromptShare()
     local _, target = addon.UnitName("target")
+    addon.UpdateScope()
+    local scope = addon.Scope()
+    local selection
+    if panel and panel.scope == scope and next(panel.selected) then
+        selection = {}
+        for key in pairs(panel.selected) do selection[key] = true end
+    end
+    local function send(action, input)
+        if not addon.UpdateScope() or addon.Scope() ~= scope then
+            return false, "Гільдія змінилася. Відкрийте передавання ще раз."
+        end
+        if input then return action(input, selection) end
+        return action(selection)
+    end
     addon.RefreshRoster()
     openDialog({
         title = "Поділитися переліком",
-        text = "Ім’я та прізвище гільдійця",
+        text = (selection and ("Вибрано записів: %d"):format(selectionSize(selection)) or "Увесь список")
+            .. "\nІм’я та прізвище гільдійця",
         value = target, limit = addon.NameLimit, confirm = "Надіслати", autocomplete = true,
-        action = addon.Share,
+        action = function(input) return send(addon.Share, input) end,
+        publishAction = function() return send(addon.Publish) end,
     })
 end
 
@@ -478,12 +551,14 @@ local function renderReview()
             local record = change.record
             row.check:SetChecked(offer.selected[change.key] == true)
             row.name:SetText(record.kind == "G" and "Гільдія: " .. record.name or record.name)
-            local detail = not change.new and ("Смерті: %d"):format(record.deaths) or record.note
-            row.detail:SetText(detail)
+            row.priority:SetText(change.higherPriority and "↑ Високий" or (record.high and "Високий" or "Звичайний"))
+            row.priority:SetTextColor(unpack(record.high and color.gold or color.muted))
+            row.detail:SetText(record.note ~= "" and record.note or "Без коментаря")
+            row.author:SetText((record.author ~= "" and record.author or "Автор невідомий")
+                .. (change.moreDeaths and (" · Смерті: %d"):format(record.deaths) or ""))
         end
     end
-    local selected = 0
-    for _ in pairs(offer.selected) do selected = selected + 1 end
+    local selected = selectionSize(offer.selected)
     review.count:SetText(("Позначено %d з %d"):format(selected, #offer.changes))
     enabled(review.confirm, selected > 0)
 end
@@ -497,7 +572,8 @@ local function selectAll(value)
 end
 
 local function createReview()
-    local root = window("GrudgeBookReview", 516, 511, "FULLSCREEN_DIALOG")
+    local root = window("GrudgeBookReview", 516, 560, "FULLSCREEN_DIALOG")
+    local reviewRowHeight = 52
     root.rows = {}
     tinsert(UISpecialFrames, "GrudgeBookReview")
     label(root, "GameFontNormalLarge", color.gold, "Імпорт Книги Образ"):SetPoint("TOPLEFT", 18, -15)
@@ -508,19 +584,19 @@ local function createReview()
     local list = CreateFrame("Frame", nil, root)
     list:SetPoint("TOPLEFT", 18, -91)
     list:SetPoint("TOPRIGHT", -18, -91)
-    list:SetHeight(rowCount * 45 + 4)
+    list:SetHeight(rowCount * reviewRowHeight + 4)
     list:EnableMouseWheel(true)
     list:SetScript("OnMouseWheel", function(_, delta)
         root.scroll:SetValue(root.scroll:GetValue() - delta)
     end)
     fill(list, color.inset, 0, 0)
-    root.empty = label(list, "GameFontHighlight", color.muted, "Нових записів або лічильників до оновлення немає.")
+    root.empty = label(list, "GameFontHighlight", color.muted, "Нових записів або оновлень немає.")
     root.empty:SetPoint("CENTER")
     for index = 1, rowCount do
         local row = CreateFrame("Frame", nil, list)
-        row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * 45)
-        row:SetPoint("TOPRIGHT", -17, -2 - (index - 1) * 45)
-        row:SetHeight(44)
+        row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * reviewRowHeight)
+        row:SetPoint("TOPRIGHT", -17, -2 - (index - 1) * reviewRowHeight)
+        row:SetHeight(reviewRowHeight - 1)
         fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
         row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
         row.check:SetSize(26, 26)
@@ -531,14 +607,21 @@ local function createReview()
         end)
         row.name = label(row, "GameFontHighlight", color.white)
         row.name:SetPoint("TOPLEFT", 36, -6)
-        row.name:SetWidth(405)
+        row.name:SetWidth(324)
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
+        row.priority = label(row, "GameFontHighlightSmall", color.gold)
+        row.priority:SetPoint("TOPRIGHT", -9, -7)
         row.detail = label(row, "GameFontHighlightSmall", color.muted)
-        row.detail:SetPoint("TOPLEFT", 36, -23)
+        row.detail:SetPoint("TOPLEFT", 36, -22)
         row.detail:SetWidth(405)
         row.detail:SetJustifyH("LEFT")
         row.detail:SetWordWrap(false)
+        row.author = label(row, "GameFontHighlightSmall", color.muted)
+        row.author:SetPoint("TOPLEFT", 36, -36)
+        row.author:SetWidth(405)
+        row.author:SetJustifyH("LEFT")
+        row.author:SetWordWrap(false)
         root.rows[index] = row
     end
     root.scroll = CreateFrame("Slider", nil, list)
@@ -556,7 +639,7 @@ local function createReview()
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderReview)
     root.count = label(root, "GameFontHighlightSmall", color.muted)
-    root.count:SetPoint("TOPLEFT", 18, -418)
+    root.count:SetPoint("TOPLEFT", 18, -470)
     button(root, "Позначити всі", 110, function() selectAll(true) end):SetPoint("BOTTOMLEFT", 18, 15)
     button(root, "Зняти всі", 83, function() selectAll(false) end):SetPoint("BOTTOMLEFT", 135, 15)
     root.confirm = button(root, "Прийняти", 102, function()
@@ -590,7 +673,7 @@ presentOffer = function()
     offer.selected = {}
     review.offer = offer
     review.sender:SetText("Відправник: " .. offer.sender)
-    review.summary:SetText(("Нових записів: %d. Оновлень лічильника: %d."):format(offer.added, offer.updated))
+    review.summary:SetText(("Нових записів: %d. Оновлень: %d."):format(offer.added, offer.updated))
     review.empty:SetShown(#offer.changes == 0)
     local maximum = math.max(0, #offer.changes - rowCount)
     review.scroll:SetMinMaxValues(0, maximum)
@@ -638,7 +721,7 @@ function addon.InitMenus()
     end
 end
 
-local alertName, expiration, targetButton, pingButton
+local alertName, portraitUnit, expiration, targetButton, pingButton
 local alertMoving = false
 local alertWidth, alertHeight, alertAlpha = 250, 72, 0.84
 
@@ -708,11 +791,24 @@ local function cancelAlertTimer()
 end
 
 function addon.CloseAlert()
-    alertName = nil
+    alertName, portraitUnit = nil, nil
     cancelAlertTimer()
     if toast then
         toast:Hide()
         refreshAlertButtons()
+    end
+end
+
+local function refreshAlertPortrait()
+    if not portraitUnit or not SetPortraitTexture then
+        return
+    end
+    if alertName and addon.UnitName(portraitUnit) ~= addon.PlayerName(alertName) then
+        return
+    end
+    local ready = not IsUnitModelReadyForUI or IsUnitModelReadyForUI(portraitUnit)
+    if addon.Ordinary(ready) and ready then
+        SetPortraitTexture(toast.portrait, portraitUnit)
     end
 end
 
@@ -755,16 +851,21 @@ local function createAlert()
     stripe:SetPoint("BOTTOMLEFT", 1, 1)
     stripe:SetWidth(3)
     stripe:SetColorTexture(unpack(color.red))
+    root.portrait = root:CreateTexture(nil, "ARTWORK")
+    root.portrait:SetPoint("TOPLEFT", 9, -8)
+    root.portrait:SetSize(30, 30)
     root.name = label(root, "GameFontNormal", color.red)
-    root.name:SetPoint("TOPLEFT", 10, -7)
-    root.name:SetWidth(215)
+    root.name:SetPoint("TOPLEFT", 46, -7)
+    root.name:SetWidth(179)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
     root.note = label(root, "GameFontHighlightSmall", color.white)
-    root.note:SetPoint("TOPLEFT", 10, -23)
-    root.note:SetWidth(230)
+    root.note:SetPoint("TOPLEFT", 46, -23)
+    root.note:SetWidth(194)
     root.note:SetJustifyH("LEFT")
     root.note:SetMaxLines(2)
+    root.priority = label(root, "GameFontHighlightSmall", color.gold, "Високий")
+    root.priority:SetPoint("BOTTOMLEFT", 10, 8)
     local close = button(root, "×", 17, addon.CloseAlert)
     close:SetHeight(17)
     close:SetPoint("TOPRIGHT", -5, -5)
@@ -772,7 +873,15 @@ local function createAlert()
     root:RegisterEvent("PLAYER_TARGET_CHANGED")
     root:RegisterEvent("DISPLAY_SIZE_CHANGED")
     root:RegisterEvent("UI_SCALE_CHANGED")
-    root:SetScript("OnEvent", function(self, event)
+    root:RegisterEvent("UNIT_PORTRAIT_UPDATE")
+    root:RegisterEvent("PORTRAITS_UPDATED")
+    root:SetScript("OnEvent", function(self, event, unit)
+        if event == "UNIT_PORTRAIT_UPDATE" or event == "PORTRAITS_UPDATED" then
+            if event == "PORTRAITS_UPDATED" or (addon.IsText(unit) and unit == portraitUnit) then
+                refreshAlertPortrait()
+            end
+            return
+        end
         if not alertMoving and (event == "DISPLAY_SIZE_CHANGED" or event == "UI_SCALE_CHANGED") then
             positionAlert(self)
         end
@@ -787,11 +896,19 @@ function addon.ShowAlert(entry, preview)
     end
     cancelAlertTimer()
     alertName = not preview and entry.name or nil
+    portraitUnit = entry.unit
+    toast.portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    refreshAlertPortrait()
     toast.name:SetText(entry.name)
+    toast.name:SetTextColor(unpack(entry.high and color.gold or color.red))
     toast.note:SetText(entry.note)
+    toast.priority:SetShown(entry.high == true)
     toast:Show()
     refreshAlertButtons()
-    PlaySound(SOUNDKIT.RAID_WARNING, "Master")
+    local sound = GrudgeBookDB.sound
+    if preview or (sound[entry.kind] ~= false and (not sound.highOnly or entry.high)) then
+        PlaySound(SOUNDKIT.RAID_WARNING, "Master")
+    end
     if not alertMoving then
         expiration = C_Timer.NewTimer(12, addon.CloseAlert)
     end

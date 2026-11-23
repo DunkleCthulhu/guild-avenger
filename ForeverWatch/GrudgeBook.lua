@@ -224,7 +224,7 @@ local function remember(entry, key, faction, guid)
     end
 end
 
-local function warn(key, entry, player)
+local function warn(key, entry, player, unit)
     local now = GetTime()
     if alerts[key] and now - alerts[key] < cooldown then
         return
@@ -232,8 +232,10 @@ local function warn(key, entry, player)
     alerts[key] = now
     local guild = entry.kind == "G" and "Гільдія «" .. entry.name .. "»" or ""
     local reason = entry.note ~= "" and " — " .. entry.note or ""
-    say("Ворог поруч: " .. player .. (guild ~= "" and " — " .. guild or "") .. reason)
-    addon.ShowAlert({ name = player, note = guild ~= "" and guild .. reason or entry.note })
+    local heading = entry.high and "Високий пріоритет: " or "Ворог поруч: "
+    say(heading .. player .. (guild ~= "" and " — " .. guild or "") .. reason)
+    addon.ShowAlert({ name = player, note = guild ~= "" and guild .. reason or entry.note,
+        kind = entry.kind, high = entry.high, unit = unit })
 end
 
 local function scanUnit(unit, alreadySeen)
@@ -253,7 +255,7 @@ local function scanUnit(unit, alreadySeen)
         remember(entry, key, faction, guid)
     end
     if key ~= alreadySeen then
-        warn(key, entry, name)
+        warn(key, entry, name, unit)
     end
     return key
 end
@@ -298,12 +300,24 @@ local function sortedEntries()
         list[#list + 1] = entry
     end
     table.sort(list, function(left, right)
+        local leftHigh, rightHigh = left.high == true, right.high == true
+        if leftHigh ~= rightHigh then
+            return leftHigh
+        end
         if strcmputf8i then
             return strcmputf8i(left.name, right.name) < 0
         end
         return lowerName(left.name) < lowerName(right.name)
     end)
     return list
+end
+
+local function setPriority(entry, high)
+    local key = entryName(entry.name, entry.kind)
+    if updateScope() and entries[key] == entry then
+        entry.high = high and true or nil
+        addon.RefreshUI()
+    end
 end
 
 local function addEnemy(input, reason, fromUnit, kind)
@@ -408,12 +422,18 @@ local function mergeEntries(incoming, preview)
                 else
                     entries[key] = record
                 end
-            elseif record.kind ~= "G" and record.deaths > previous.deaths then
-                updated = updated + 1
-                if preview then
-                    changes[#changes + 1] = { key = key, record = record, new = false }
-                else
-                    previous.deaths = math.max(previous.deaths, record.deaths)
+            else
+                local moreDeaths = record.kind ~= "G" and record.deaths > previous.deaths
+                local higherPriority = record.high == true and not previous.high
+                if moreDeaths or higherPriority then
+                    updated = updated + 1
+                    if preview then
+                        changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths,
+                            higherPriority = higherPriority }
+                    else
+                        previous.deaths = math.max(previous.deaths, record.deaths)
+                        if higherPriority then previous.high = true end
+                    end
                 end
             end
         end
@@ -442,6 +462,7 @@ addon.Merge = mergeEntries
 addon.Add = addEnemy
 addon.EditNote = changeNote
 addon.Delete = deleteEnemy
+addon.SetPriority = setPriority
 
 local function splitAdd(input)
     if input == "" then
@@ -480,7 +501,7 @@ local function slash(input)
     elseif command == "share" then
         _, message = addon.Share(rest)
     elseif command == "test" then
-        addon.ShowAlert({ name = "GrudgeBook", note = "Тест рейд-тривоги." }, true)
+        addon.ShowAlert({ name = "GrudgeBook", note = "Тест сповіщення.", unit = "player" }, true)
     elseif command == "list" then
         for _, entry in ipairs(sortedEntries()) do
             say(entry.kind == "G" and ("Гільдія «%s»"):format(entry.name)
@@ -499,6 +520,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GrudgeBookDB = GrudgeBookDB or {}
         GrudgeBookDB.lists = GrudgeBookDB.lists or {}
         GrudgeBookDB.guildsImported = GrudgeBookDB.guildsImported or {}
+        GrudgeBookDB.sound = GrudgeBookDB.sound or {}
         addon.InitSync()
         addon.InitMenus()
         SLASH_GRUDGEBOOK1, SLASH_GRUDGEBOOK2 = "/gb", "/fw"

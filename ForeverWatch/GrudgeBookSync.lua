@@ -140,7 +140,7 @@ local function recipient(input)
     return exact
 end
 
-function addon.Share(input)
+function addon.Share(input, selection)
     if sending then
         return false, "Дочекайтеся завершення поточного передавання."
     end
@@ -159,7 +159,7 @@ function addon.Share(input)
     if not member.online then
         return false, member.name .. " зараз не в мережі."
     end
-    local packets, message = makePackets()
+    local packets, message = makePackets(selection)
     if not packets then
         return false, message
     end
@@ -167,11 +167,11 @@ function addon.Share(input)
     return true, "Починаю передавання " .. member.name .. "."
 end
 
-makePackets = function()
+makePackets = function(selection)
     local entries = {}
     for _, entry in ipairs(addon.Entries()) do
         local entryKey = addon.EntryName(entry.name, entry.kind)
-        if addon.EligibleRecord(entryKey, entry) then
+        if (not selection or selection[entryKey]) and addon.EligibleRecord(entryKey, entry) then
             entries[#entries + 1] = entry
         end
     end
@@ -189,6 +189,10 @@ makePackets = function()
         local faction = entry.kind == "G" and "G" or (entry.faction == "Alliance" and "A" or "H")
         packets[#packets + 1] = ("R\t%s\t%d\t%s\t%d\t%d\t%s"):format(id, index, faction,
             entry.addedAt, entry.deaths, entry.name)
+        -- Existing 2.0 clients ignore the optional priority packet.
+        if entry.high then
+            packets[#packets + 1] = ("H\t%s\t%d\t1"):format(id, index)
+        end
         packets[#packets + 1] = ("N\t%s\t%d\t%s\t%s"):format(id, index, entry.author, entry.note)
     end
     return packets, id
@@ -207,14 +211,14 @@ enqueue = function(key, packets, quiet)
     end
 end
 
-function addon.Publish()
+function addon.Publish(selection)
     if not addon.UpdateScope() or not guildScope() then
         return false, "Публікація доступна учасникам гільдії."
     end
     if C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
         return false, "WoW тимчасово обмежив повідомлення в чаті."
     end
-    local packets, id = makePackets()
+    local packets, id = makePackets(selection)
     if not packets then
         return false, id
     end
@@ -276,7 +280,7 @@ local function finish(sender, batch)
             return
         end
         entries[part.key] = { name = part.name, kind = part.kind, faction = part.faction, addedAt = part.addedAt,
-            deaths = part.deaths, author = part.author, note = part.note }
+            deaths = part.deaths, author = part.author, note = part.note, high = part.high }
     end
     local added, updated, changes = addon.Merge(entries, true)
     addon.OfferImport(roster[sender].name, added, updated, changes or {}, function(selection)
@@ -284,8 +288,8 @@ local function finish(sender, batch)
             addon.Say("Імпорт скасовано: відправник більше не підтверджений у ростері.")
             return
         end
-        local newEntries, newerCounts = addon.Merge(selection, false)
-        addon.Say(("Імпорт завершено. Додано %d, оновлено лічильників %d."):format(newEntries, newerCounts))
+        local newEntries, updatedEntries = addon.Merge(selection, false)
+        addon.Say(("Імпорт завершено. Додано %d, оновлено %d."):format(newEntries, updatedEntries))
     end)
 end
 
@@ -308,7 +312,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         end
         return
     end
-    local operation, id, data = message:match("^([BRN])\t([%da-f]+%.[%da-f]+)\t(.*)$")
+    local operation, id, data = message:match("^([BRNH])\t([%da-f]+%.[%da-f]+)\t(.*)$")
     if not operation or #id > 16 then
         return
     end
@@ -347,6 +351,8 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         record.key, record.name, record.kind = key, full, kind
         record.faction = kind == "P" and (faction == "A" and "Alliance" or "Horde") or nil
         record.addedAt, record.deaths = addedAt, kind == "P" and deaths or 0
+    elseif operation == "H" and record.key and record.note == nil and fields == "1" then
+        record.high = true
     elseif operation == "N" and record.note == nil then
         local author, note = fields:match("^([^\t]*)\t([^\t]*)$")
         note = addon.Clean(note, addon.NoteLimit)
