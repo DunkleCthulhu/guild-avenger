@@ -1,4 +1,5 @@
 local _, addon = ...
+local L = addon.Text
 local prefix = "GuildAvStats1"
 local maxCount = 2147483647
 local journalLimit = 100
@@ -203,14 +204,14 @@ function addon.RequestStats()
     local score, _, key = ownScore()
     if not score or not addon.IsGuildMember(key) then
         addon.RefreshRoster()
-        return "Потрібен завантажений ростер гільдії."
+        return L("statsRosterRequired")
     end
     local now = GetTime()
-    if lastRequest and now - lastRequest < 20 then return "Зачекайте перед наступним оновленням." end
-    if send("Q") ~= Enum.SendAddonMessageResult.Success then return "WoW не прийняв запит. Спробуйте пізніше." end
+    if lastRequest and now - lastRequest < 20 then return L("statsRequestCooldown") end
+    if send("Q") ~= Enum.SendAddonMessageResult.Success then return L("statsRequestFailed") end
     lastRequest = now
     publish()
-    return "Запит надіслано. Рейтинг оновиться після відповіді гільдійців."
+    return L("statsRequestSent")
 end
 
 function addon.ReceiveStats(receivedPrefix, message, channel, sender)

@@ -1,6 +1,7 @@
 local _, addon = ...
+local L = addon.Text
 local panel, dialog, review, toast, download, minimapButton, soundWindow
-local statsWindow, commentWindow
+local statsWindow, commentWindow, settingsWindow
 local offers = {}
 local rowCount, mainRowCount, rowHeight = 7, 6, 51
 local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
@@ -94,14 +95,14 @@ local function showComment(text)
         local root = window("GuildAvengerComment", 500, 174, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(32)
         tinsert(UISpecialFrames, "GuildAvengerComment")
-        label(root, "GameFontNormalLarge", color.gold, "Коментар"):SetPoint("TOPLEFT", 20, -16)
+        label(root, "GameFontNormalLarge", color.gold, L("note")):SetPoint("TOPLEFT", 20, -16)
         root.text = label(root, "GameFontHighlight", color.white)
         root.text:SetPoint("TOPLEFT", 20, -47)
         root.text:SetWidth(460)
         root.text:SetJustifyH("LEFT")
         root.text:SetWordWrap(true)
         root.text:SetNonSpaceWrap(true)
-        button(root, "Закрити", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 13)
+        button(root, L("close"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 13)
         commentWindow = root
     end
     commentWindow.text:SetText(text)
@@ -127,7 +128,7 @@ local function status(text, success, message)
 end
 
 local function metadata(entry)
-    local author = entry.author ~= "" and entry.author or "Автор невідомий"
+    local author = entry.author ~= "" and entry.author or L("unknownAuthor")
     if entry.addedAt > 0 then
         return author .. "  /  " .. date("%d.%m.%Y %H:%M", entry.addedAt)
     end
@@ -138,7 +139,7 @@ local function lastSeen(entry)
     local seen = entry.seen
     if not seen then return end
     local zone = seen.zone and seen.zone ~= "" and (" · " .. seen.zone) or ""
-    return "Бачили " .. date("%d.%m %H:%M", seen.at) .. zone
+    return L("lastSeen", date("%d.%m %H:%M", seen.at), zone)
 end
 
 local function selectionSize(selection)
@@ -154,8 +155,8 @@ end
 
 local function updateAddLabels()
     local manual = manualName()
-    panel.submit.label:SetText(panel.editing and "Зберегти" or (manual and "Додати" or "Додати ціль"))
-    panel.guild.label:SetText(manual and "Додати гільдію" or "Гільдія з цілі")
+    panel.submit.label:SetText(panel.editing and L("save") or (manual and L("add") or L("addTarget")))
+    panel.guild.label:SetText(manual and L("addGuild") or L("guildFromTarget"))
 end
 
 local function renderRows()
@@ -168,12 +169,12 @@ local function renderRows()
         if entry then
             local key = addon.RecordKey(entry)
             row.check:SetChecked(panel.selected[key] == true)
-            row.name:SetText(entry.kind == "G" and "Гільдія: " .. entry.name or entry.name)
+            row.name:SetText(entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name)
             row.note:SetText(entry.note)
             row.comment:SetShown(entry.note ~= "")
-            row.metadata:SetText(lastSeen(entry) or (entry.pending and "Очікує підтвердження WoW" or metadata(entry)))
+            row.metadata:SetText(lastSeen(entry) or (entry.pending and L("pendingVerification") or metadata(entry)))
             row.deaths:SetText(("%d"):format(entry.deaths))
-            row.priority.label:SetText(entry.high and "Високий" or "Звичайний")
+            row.priority.label:SetText(entry.high and L("high") or L("normal"))
             row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
         end
     end
@@ -207,7 +208,7 @@ function addon.RefreshUI()
         if not present[key] then panel.selected[key] = nil end
     end
     local selected = selectionSize(panel.selected)
-    panel.count:SetText(("Записи: %d / %d"):format(#panel.entries, #allEntries))
+    panel.count:SetText(L("entryCount", #panel.entries, #allEntries))
     panel.selectAll:SetChecked(#allEntries > 0 and selected == #allEntries)
     panel.selectAll:SetEnabled(#allEntries > 0)
     panel.selectionCount:SetText(selected > 0 and tostring(selected) or "")
@@ -217,14 +218,14 @@ function addon.RefreshUI()
     panel.note:SetEnabled(ready)
     enabled(panel.submit, ready)
     enabled(panel.share, ready and scope ~= "local")
-    panel.share.label:SetText(selected > 0 and ("Поділитися (%d)"):format(selected) or "Поділитися переліком")
+    panel.share.label:SetText(selected > 0 and L("shareCount", selected) or L("shareWatchlist"))
     panel.clearSelection:SetShown(selected > 0)
     updateAddLabels()
     panel.cancel:SetShown(panel.editing ~= nil)
     panel.guild:SetShown(not panel.editing)
     enabled(panel.guild, ready)
-    panel.empty:SetText(ready and (#allEntries > 0 and "За цим фільтром записів немає" or "Книга порожня")
-        or "Завантаження гільдії…")
+    panel.empty:SetText(ready and (#allEntries > 0 and L("emptyFilter") or L("emptyList"))
+        or L("loadingGuild"))
     panel.empty:SetShown(#panel.entries == 0)
     local maximum = math.max(0, #panel.entries - mainRowCount)
     panel.scroll:SetMinMaxValues(0, maximum)
@@ -280,7 +281,7 @@ local function submit()
                 panel.prefilledName = nil
                 panel.name:SetText("")
                 panel.name:SetFocus()
-                status(panel.status, false, "Введіть повне ім’я персонажа або виберіть ворога ціллю.")
+                status(panel.status, false, L("enterNameOrTarget"))
                 return
             end
             name = target
@@ -310,14 +311,14 @@ local function soundOption(parent, x, y, title, key, checkedByDefault)
 end
 
 local sounds = {
-    { "RAID_WARNING", "Рейд-тривога" },
-    { "RAID_BOSS_EMOTE_WARNING", "Попередження рейдового боса" },
-    { "READY_CHECK", "Перевірка готовності" },
-    { "ALARM_CLOCK_WARNING_1", "Будильник 1" },
-    { "ALARM_CLOCK_WARNING_3", "Будильник 3" },
-    { "UI_BNET_TOAST", "Сповіщення Battle.net" },
-    { "MAP_PING", "Пінг на карті" },
-    { "IG_QUEST_LOG_OPEN", "Журнал завдань" },
+    { "RAID_WARNING", "soundRaidWarning" },
+    { "RAID_BOSS_EMOTE_WARNING", "soundRaidBossEmote" },
+    { "READY_CHECK", "soundReadyCheck" },
+    { "ALARM_CLOCK_WARNING_1", "soundAlarm1" },
+    { "ALARM_CLOCK_WARNING_3", "soundAlarm3" },
+    { "UI_BNET_TOAST", "soundBattleNet" },
+    { "MAP_PING", "soundMapPing" },
+    { "IG_QUEST_LOG_OPEN", "soundQuestLog" },
 }
 
 local function playAlertSound(high)
@@ -332,7 +333,7 @@ end
 
 local function soundPicker(root, y, high)
     local setting = high and "highSound" or "normalSound"
-    local title = high and "Високий пріоритет" or "Звичайний пріоритет"
+    local title = high and L("highPriority") or L("normalPriority")
     label(root, "GameFontHighlightSmall", color.muted, title):SetPoint("TOPLEFT", 20, y)
     local dropdown = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
     dropdown:SetPoint("TOPLEFT", 20, y - 16)
@@ -344,34 +345,83 @@ local function soundPicker(root, y, high)
         local function selectSound(choice)
             GuildAvengerDB.sound[setting] = choice
         end
-        local default = high and "Типовий · висхідний сигнал" or "Типовий · рейд-тривога"
+        local default = high and L("defaultHighSound") or L("defaultNormalSound")
         menu:CreateRadio(default, function() return not SOUNDKIT[GuildAvengerDB.sound[setting] or ""] end,
             function() selectSound(nil) end)
         for _, sound in ipairs(sounds) do
-            if SOUNDKIT[sound[1]] then menu:CreateRadio(sound[2], isSelected, selectSound, sound[1]) end
+            if SOUNDKIT[sound[1]] then menu:CreateRadio(L(sound[2]), isSelected, selectSound, sound[1]) end
         end
     end)
-    button(root, "Прослухати", 104, function() playAlertSound(high) end):SetPoint("LEFT", dropdown, "RIGHT", 10, 0)
+    button(root, L("previewSound"), 104, function() playAlertSound(high) end):SetPoint("LEFT", dropdown, "RIGHT", 10, 0)
 end
 
 function addon.PromptSounds()
     if not soundWindow then
         local root = window("GuildAvengerSounds", 436, 247, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSounds")
-        label(root, "GameFontNormalLarge", color.gold, "Звуки Guild Avenger"):SetPoint("TOPLEFT", 20, -17)
+        label(root, "GameFontNormalLarge", color.gold, L("soundTitle")):SetPoint("TOPLEFT", 20, -17)
         soundPicker(root, -51, false)
         soundPicker(root, -108, true)
-        soundOption(root, 20, -169, "Персонажі", "P", true)
-        soundOption(root, 121, -169, "Гільдії", "G", true)
-        soundOption(root, 196, -169, "Лише високий пріоритет", "highOnly", false)
-        button(root, "Готово", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 15)
+        soundOption(root, 20, -169, L("characters"), "P", true)
+        soundOption(root, 121, -169, L("guilds"), "G", true)
+        soundOption(root, 196, -169, L("highOnly"), "highOnly", false)
+        button(root, L("done"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 15)
         soundWindow = root
     end
     soundWindow:Show()
 end
 
+function addon.PromptSettings()
+    if not settingsWindow then
+        local root = window("GuildAvengerSettings", 430, 165, "FULLSCREEN_DIALOG")
+        tinsert(UISpecialFrames, "GuildAvengerSettings")
+        label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
+        label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
+
+        local dropdown = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
+        dropdown:SetPoint("TOPRIGHT", -20, -48)
+        dropdown:SetWidth(230)
+        local message = label(root, "GameFontHighlightSmall", color.muted, L("languageHint"))
+        message:SetPoint("TOPLEFT", 20, -92)
+        message:SetPoint("TOPRIGHT", -20, -92)
+        message:SetJustifyH("LEFT")
+
+        local selected = addon.Language()
+        local apply = button(root, L("applyLanguage"), 235, function()
+            if InCombatLockdown() then
+                status(message, false, L("reloadAfterCombat"))
+                return
+            end
+            GuildAvengerDB.language = selected
+            ReloadUI()
+        end)
+        apply:SetPoint("BOTTOMRIGHT", -20, 15)
+        button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
+        root:SetScript("OnShow", function()
+            selected = addon.Language()
+            dropdown:GenerateMenu()
+            enabled(apply, false)
+            status(message, true, L("languageHint"))
+        end)
+        dropdown:SetupMenu(function(_, menu)
+            local function isSelected(language)
+                return selected == language
+            end
+            local function selectLanguage(language)
+                selected = language
+                enabled(apply, selected ~= addon.Language())
+                status(message, true, L("languageHint"))
+            end
+            menu:CreateRadio("English", isSelected, selectLanguage, "enUS")
+            menu:CreateRadio("Українська", isSelected, selectLanguage, "ukUA")
+        end)
+        settingsWindow = root
+    end
+    settingsWindow:Show()
+end
+
 local function createFilters(root)
-    local titles, kinds = { "Усі", "Персонажі", "Гільдії" }, { false, "P", "G" }
+    local titles, kinds = { L("all"), L("characters"), L("guilds") }, { false, "P", "G" }
     root.Tabs = {}
     root.minTabWidth = 88
     for index, title in ipairs(titles) do
@@ -390,7 +440,7 @@ local function createFilters(root)
     root.Tabs[1]:SetPoint("TOPLEFT", 20, -168)
     PanelTemplates_SetNumTabs(root, #titles)
     PanelTemplates_SetTab(root, 1)
-    root.priorityFilter = checkbox(root, 448, -174, "Лише високий пріоритет")
+    root.priorityFilter = checkbox(root, 448, -174, L("highOnly"))
     root.priorityFilter:SetScript("OnClick", function(self)
         root.filterHigh = self:GetChecked()
         root.scroll:SetValue(0)
@@ -402,14 +452,14 @@ local function createFilters(root)
     toolbar:SetHeight(30)
     fill(toolbar, color.border, 0, -2)
     fill(toolbar, color.panel, 1, -1)
-    root.selectAll = checkbox(toolbar, 7, -3, "Позначити всі")
+    root.selectAll = checkbox(toolbar, 7, -3, L("selectAll"))
     root.selectionCount = label(toolbar, "GameFontHighlightSmall", color.gold)
     root.selectionCount:SetPoint("LEFT", 112, 0)
-    root.deleteSelected = button(toolbar, "Вилучити позначені", 147, function() confirmBulkRemoval() end)
+    root.deleteSelected = button(toolbar, L("removeSelected"), 147, function() confirmBulkRemoval() end)
     root.deleteSelected:SetPoint("LEFT", 141, 0)
     root.deleteSelected:SetHeight(23)
-    label(toolbar, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("LEFT", 315, 0)
-    label(toolbar, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("LEFT", 395, 0)
+    label(toolbar, "GameFontHighlightSmall", color.muted, L("priority")):SetPoint("LEFT", 315, 0)
+    label(toolbar, "GameFontHighlightSmall", color.muted, L("deaths")):SetPoint("LEFT", 395, 0)
     root.selectAll:SetScript("OnClick", function(self)
         root.selected = {}
         if self:GetChecked() then
@@ -444,7 +494,7 @@ local function createPanel()
     root.count:SetPoint("RIGHT")
     root.search = input(root, 210, addon.NoteLimit)
     root.search:SetPoint("LEFT", header, "LEFT", 201, 0)
-    local hint = label(root.search, "GameFontHighlightSmall", color.muted, "Пошук за ім’ям або коментарем")
+    local hint = label(root.search, "GameFontHighlightSmall", color.muted, L("searchHint"))
     hint:SetPoint("LEFT", 8, 0)
     root.search:SetScript("OnTextChanged", function(self)
         hint:SetShown(self:GetText() == "")
@@ -456,21 +506,21 @@ local function createPanel()
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
 
-    label(root, "GameFontHighlightSmall", color.muted, "Повне ім’я персонажа або назва гільдії"):SetPoint("TOPLEFT", 20, -57)
+    label(root, "GameFontHighlightSmall", color.muted, L("nameField")):SetPoint("TOPLEFT", 20, -57)
     root.name = input(root, 518, addon.NameLimit)
     root.name:SetPoint("TOPLEFT", 20, -74)
-    root.submit = button(root, "Додати ціль", 96, submit)
+    root.submit = button(root, L("addTarget"), 96, submit)
     root.submit:SetPoint("LEFT", root.name, "RIGHT", 8, 0)
-    label(root, "GameFontHighlightSmall", color.muted, "Коментар (необов’язково)"):SetPoint("TOPLEFT", 20, -116)
+    label(root, "GameFontHighlightSmall", color.muted, L("optionalNote")):SetPoint("TOPLEFT", 20, -116)
     root.note = input(root, 518, addon.NoteLimit)
     root.note:SetPoint("TOPLEFT", 20, -133)
-    root.cancel = button(root, "Скасувати", 96, function()
+    root.cancel = button(root, L("cancel"), 96, function()
         resetForm()
         addon.RefreshUI()
         status(root.status, true, "")
     end)
     root.cancel:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
-    root.guild = button(root, "Гільдія з цілі", 96, submitGuild)
+    root.guild = button(root, L("guildFromTarget"), 96, submitGuild)
     root.guild:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
     root.name:SetScript("OnEnterPressed", submit)
     root.name:SetScript("OnTextChanged", function(_, userInput)
@@ -541,7 +591,7 @@ local function createPanel()
             addon.SetPriority(row.entry, not row.entry.high)
         end)
         row.priority:SetPoint("RIGHT", -220, 0)
-        local remove = button(row, "Вилучити", 75, function()
+        local remove = button(row, L("remove"), 75, function()
             local entry = row.entry
             if panel.editing == entry then
                 resetForm()
@@ -549,7 +599,7 @@ local function createPanel()
             status(root.status, addon.Delete(entry.name, entry.kind, entry))
         end)
         remove:SetPoint("RIGHT", -7, 0)
-        button(row, "Коментар", 78, function()
+        button(row, L("note"), 78, function()
             local entry = row.entry
             panel.editing = entry
             panel.name:SetText(entry.name)
@@ -574,12 +624,14 @@ local function createPanel()
     thumb:SetColorTexture(unpack(color.gold))
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderRows)
-    root.soundSettings = button(root, "Звуки…", 96, addon.PromptSounds)
+    root.soundSettings = button(root, L("sounds"), 96, addon.PromptSounds)
     root.soundSettings:SetPoint("TOPLEFT", 20, -554)
-    button(root, "Статистика", 110, function() addon.OpenStats() end):SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
-    root.share = button(root, "Поділитися переліком", 159, function() addon.PromptShare() end)
+    local statsButton = button(root, L("statistics"), 110, function() addon.OpenStats() end)
+    statsButton:SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
+    button(root, L("settings"), 118, addon.PromptSettings):SetPoint("LEFT", statsButton, "RIGHT", 8, 0)
+    root.share = button(root, L("shareWatchlist"), 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
-    root.clearSelection = button(root, "Зняти вибір", 105, function()
+    root.clearSelection = button(root, L("clearSelection"), 105, function()
         root.selected = {}
         addon.RefreshUI()
     end)
@@ -633,21 +685,21 @@ function addon.RefreshStats()
         row.add:SetShown(record ~= nil and tab == 3)
         row:SetShown(record ~= nil)
         if record and tab == 1 then
-            row.name:SetText(record.killer or "Невідомий нападник")
+            row.name:SetText(record.killer or L("unknownAttacker"))
             row.count:SetText(date("%d.%m %H:%M", record.at))
-            local place = record.zone and record.zone ~= "" and record.zone or "Невідома локація"
+            local place = record.zone and record.zone ~= "" and record.zone or L("unknownLocation")
             if record.area and record.area ~= "" and record.area ~= place then place = place .. " · " .. record.area end
             if record.x then place = place .. ("  %.1f, %.1f"):format(record.x * 100, record.y * 100) end
             row.detail:SetText(place)
         elseif record then
             row.name:SetText(("%d.  %s"):format(position, record.name))
             row.count:SetText(tostring(record.count))
-            row.detail:SetText(tab == 2 and "Останні удари по цілях Книги Образ" or "Останні удари по гільдійцях")
+            row.detail:SetText(tab == 2 and L("avengerKillingBlows") or L("enemyKillingBlows"))
         end
     end
     root.empty:SetShown(#rows == 0)
     root.week:SetShown(tab == 2)
-    root.week.label:SetText(root.weekly and "Цього тижня" or "За весь час")
+    root.week.label:SetText(root.weekly and L("thisWeek") or L("allTime"))
     root.pagination:SetText(("%d / %d"):format(root.page, pages))
     enabled(root.back, root.page > 1)
     enabled(root.next, root.page < pages)
@@ -663,11 +715,11 @@ local function createStats()
     root.page, root.rows, root.Tabs = 1, {}, {}
     root.minTabWidth = 100
     tinsert(UISpecialFrames, "GuildAvengerStats")
-    label(root, "GameFontNormalLarge", color.gold, "Статистика Guild Avenger"):SetPoint("TOPLEFT", 20, -18)
+    label(root, "GameFontNormalLarge", color.gold, L("statsTitle")):SetPoint("TOPLEFT", 20, -18)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
-    local titles = { "Мої смерті", "Месники", "Вороги" }
+    local titles = { L("myDeaths"), L("avengers"), L("enemies") }
     for index, title in ipairs(titles) do
         local tab = CreateFrame("Button", nil, root, "PanelTopTabButtonTemplate")
         root.Tabs[index] = tab
@@ -687,7 +739,7 @@ local function createStats()
     list:SetPoint("TOPRIGHT", -20, -87)
     list:SetHeight(statsPageSize * 44 + 4)
     fill(list, color.inset, 0, 0)
-    root.empty = label(list, "GameFontHighlight", color.muted, "Поки немає записів")
+    root.empty = label(list, "GameFontHighlight", color.muted, L("noStats"))
     root.empty:SetPoint("CENTER")
     for index = 1, statsPageSize do
         local row = CreateFrame("Frame", nil, list)
@@ -707,7 +759,7 @@ local function createStats()
         row.detail:SetMaxLines(1)
         row.count = label(row, "GameFontHighlight", color.gold)
         row.count:SetPoint("TOPRIGHT", -10, -6)
-        row.add = button(row, "До книги", 83, function()
+        row.add = button(row, L("addFromRankings"), 83, function()
             local ok, message = addon.AddRankedEnemy(row.record.guid)
             status(root.status, ok, message)
         end)
@@ -716,23 +768,23 @@ local function createStats()
         row.add:Hide()
         root.rows[index] = row
     end
-    root.week = button(root, "За весь час", 120, function()
+    root.week = button(root, L("allTime"), 120, function()
         root.weekly = not root.weekly
         root.page = 1
         addon.RefreshStats()
     end)
     root.week:SetPoint("TOPRIGHT", -20, -53)
-    root.back = button(root, "Назад", 73, function() root.page = root.page - 1; addon.RefreshStats() end)
+    root.back = button(root, L("previous"), 73, function() root.page = root.page - 1; addon.RefreshStats() end)
     root.back:SetPoint("TOPLEFT", 20, -407)
     root.pagination = label(root, "GameFontHighlightSmall", color.muted)
     root.pagination:SetPoint("LEFT", root.back, "RIGHT", 8, 0)
-    root.next = button(root, "Далі", 73, function() root.page = root.page + 1; addon.RefreshStats() end)
+    root.next = button(root, L("next"), 73, function() root.page = root.page + 1; addon.RefreshStats() end)
     root.next:SetPoint("TOPLEFT", 149, -407)
-    root.share = checkbox(root, 20, -445, "Ділитися підсумками з гільдією")
+    root.share = checkbox(root, 20, -445, L("shareStats"))
     root.share:SetScript("OnClick", function(self) addon.SetStatsSharing(self:GetChecked()) end)
-    root.request = button(root, "Оновити рейтинг", 128, function() root.status:SetText(addon.RequestStats()) end)
+    root.request = button(root, L("refreshRankings"), 128, function() root.status:SetText(addon.RequestStats()) end)
     root.request:SetPoint("TOPRIGHT", -20, -442)
-    root.status = label(root, "GameFontHighlightSmall", color.muted, "Гільдія бачить тільки підсумки. Журнал і координати локальні.")
+    root.status = label(root, "GameFontHighlightSmall", color.muted, L("statsPrivacy"))
     root.status:SetPoint("BOTTOMLEFT", 20, 23)
     root.status:SetWidth(500)
     root.status:SetJustifyH("LEFT")
@@ -780,7 +832,7 @@ function addon.InitMinimap()
     root:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("Guild Avenger")
-        GameTooltip:AddLine("Клік або /gavenger — відкрити книгу\nПеретягування — перемістити значок", 1, 1, 1)
+        GameTooltip:AddLine(L("minimapTooltip"), 1, 1, 1)
         GameTooltip:Show()
     end)
     root:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -809,7 +861,7 @@ function addon.PromptDownload(url, description)
         local root = window("GuildAvengerDownload", 520, 158, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(30)
         tinsert(UISpecialFrames, "GuildAvengerDownload")
-        label(root, "GameFontNormalLarge", color.gold, "Завантаження Guild Avenger"):SetPoint("TOPLEFT", 18, -15)
+        label(root, "GameFontNormalLarge", color.gold, L("downloadTitle")):SetPoint("TOPLEFT", 18, -15)
         root.description = label(root, "GameFontHighlight", color.white)
         root.description:SetPoint("TOPLEFT", 18, -43)
         root.description:SetWidth(484)
@@ -818,8 +870,8 @@ function addon.PromptDownload(url, description)
         root.field:SetPoint("TOPLEFT", 18, -79)
         root.field:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
         root.field:SetScript("OnMouseUp", function(self) self:HighlightText() end)
-        label(root, "GameFontHighlightSmall", color.muted, "Ctrl+C — скопіювати посилання"):SetPoint("BOTTOMLEFT", 18, 21)
-        button(root, "Закрити", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -18, 13)
+        label(root, "GameFontHighlightSmall", color.muted, L("copyLink")):SetPoint("BOTTOMLEFT", 18, 21)
+        button(root, L("close"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -18, 13)
         root:SetScript("OnHide", function() root.field:ClearFocus() end)
         download = root
     end
@@ -893,7 +945,7 @@ local function createDialog()
     root.confirm:SetPoint("BOTTOMRIGHT", -18, 13)
     root.cancel = button(root, "", 98, function() root:Hide() end)
     root.cancel:SetPoint("RIGHT", root.confirm, "LEFT", -7, 0)
-    root.publish = button(root, "У чат гільдії", 125, function()
+    root.publish = button(root, L("postInGuildChat"), 125, function()
         local ok, message = root.publishAction()
         if ok then
             root:Hide()
@@ -903,7 +955,7 @@ local function createDialog()
         end
     end)
     root.publish:SetPoint("BOTTOMLEFT", 18, 13)
-    root.removals = checkbox(root, 18, -309, "Запропонувати вилучені записи")
+    root.removals = checkbox(root, 18, -309, L("suggestRemovals"))
     root:SetScript("OnHide", function()
         root.action = nil
         root.publishAction = nil
@@ -923,7 +975,7 @@ local function openDialog(options)
     dialog.title:SetText(options.title)
     dialog.text:SetText(options.text)
     dialog.confirm.label:SetText(options.confirm)
-    dialog.cancel.label:SetText(options.cancel or "Скасувати")
+    dialog.cancel.label:SetText(options.cancel or L("cancel"))
     dialog.autocomplete = options.autocomplete
     dialog:SetHeight(options.autocomplete and (options.removals and 365 or 339) or 190)
     dialog.status:ClearAllPoints()
@@ -957,12 +1009,12 @@ confirmBulkRemoval = function()
     local count = selectionSize(selection)
     if count == 0 then return end
     openDialog({
-        title = "Вилучити позначені записи?",
-        text = ("З Книги Образ буде вилучено записів: %d."):format(count),
-        confirm = "Вилучити",
+        title = L("confirmBulkRemove"),
+        text = L("bulkRemoveDescription", count),
+        confirm = L("remove"),
         action = function()
             local removed = addon.DeleteSelection(selection, scope)
-            return removed > 0, removed > 0 and ("Вилучено записів: %d."):format(removed) or "Вибір або гільдія змінилися."
+            return removed > 0, removed > 0 and L("removedCount", removed) or L("selectionChanged")
         end,
     })
 end
@@ -976,11 +1028,11 @@ submitGuild = function()
         return
     end
     openDialog({
-        title = "Додати гільдію вручну",
-        text = "Назва гільдії",
-        value = name, limit = addon.NameLimit, confirm = "Додати",
+        title = L("addGuildManually"),
+        text = L("guildName"),
+        value = name, limit = addon.NameLimit, confirm = L("add"),
         action = function(guild)
-            if not guild:match("%S") then return false, "Введіть назву гільдії." end
+            if not guild:match("%S") then return false, L("enterGuildName") end
             local ok, message = addon.Add(guild, note, nil, "G")
             if ok then finishForm(ok, message, guild, "G") end
             return ok, message
@@ -999,7 +1051,7 @@ function addon.PromptShare()
     end
     local function send(action, input)
         if not addon.UpdateScope() or addon.Scope() ~= scope then
-            return false, "Гільдія змінилася. Відкрийте передавання ще раз."
+            return false, L("guildChanged")
         end
         local removals = dialog.removals:IsShown() and dialog.removals:GetChecked()
         if input then return action(input, selection, removals) end
@@ -1007,10 +1059,10 @@ function addon.PromptShare()
     end
     addon.RefreshRoster()
     openDialog({
-        title = "Поділитися переліком",
-        text = (selection and ("Вибрано записів: %d"):format(selectionSize(selection)) or "Увесь список")
-            .. "\nІм’я та прізвище гільдійця",
-        value = target, limit = addon.NameLimit, confirm = "Надіслати", autocomplete = true,
+        title = L("shareWatchlist"),
+        text = (selection and L("selectedCount", selectionSize(selection)) or L("entireWatchlist"))
+            .. "\n" .. L("guildmateFullName"),
+        value = target, limit = addon.NameLimit, confirm = L("send"), autocomplete = true,
         removals = not selection and scope ~= nil and scope ~= "local" and #addon.RemovalProposals() > 0,
         action = function(input) return send(addon.Share, input) end,
         publishAction = function() return send(addon.Publish) end,
@@ -1020,7 +1072,7 @@ end
 function addon.PromptGuild(unit)
     local _, name = addon.EnemyEntry(unit, "G")
     if not name then
-        local message = "Виберіть ворога, чию гільдію видно."
+        local message = L("targetGuildNotVisible")
         if panel and panel:IsShown() then
             status(panel.status, false, message)
         else
@@ -1029,9 +1081,9 @@ function addon.PromptGuild(unit)
         return
     end
     openDialog({
-        title = "Внести гільдію в Книгу Образ",
-        text = name .. "\nКоментар (необов’язково)",
-        limit = addon.NoteLimit, confirm = "Додати",
+        title = L("addGuildToWatchlist"),
+        text = name .. "\n" .. L("optionalNote"),
+        limit = addon.NoteLimit, confirm = L("add"),
         action = function(note) return addon.Add(name, note, unit, "G") end,
     })
 end
@@ -1049,22 +1101,22 @@ local function renderReview()
         if change then
             local record = change.record
             row.check:SetChecked(offer.selected[change.key] == true)
-            local title = record.kind == "G" and "Гільдія: " .. record.name or record.name
+            local title = record.kind == "G" and L("guildNameLabel", record.name) or record.name
             row.name:SetText((change.new and "+ " or change.removed and "− " or "") .. title)
-            local priority = record.high and "Високий" or "Звичайний"
-            row.priority:SetText(change.removed and "Вилучити" or
+            local priority = record.high and L("high") or L("normal")
+            row.priority:SetText(change.removed and L("remove") or
                 (change.changedPriority and (record.high and "↑ " or "↓ ") .. priority) or
-                (change.higherPriority and "↑ Високий") or priority)
+                (change.higherPriority and L("promotePriority")) or priority)
             row.priority:SetTextColor(unpack(change.removed and color.red or record.high and color.gold or color.muted))
-            local note = record.note ~= "" and record.note or "Без коментаря"
-            row.detail:SetText(change.changedNote and "Нова причина · " .. note or note)
+            local note = record.note ~= "" and record.note or L("noNote")
+            row.detail:SetText(change.changedNote and L("proposedNote", note) or note)
             row.comment:SetShown(record.note ~= "" or change.changedNote == true)
-            row.author:SetText((record.author ~= "" and record.author or "Автор невідомий")
-                .. (record.deaths > 0 and (" · Смерті: %d"):format(record.deaths) or ""))
+            row.author:SetText((record.author ~= "" and record.author or L("unknownAuthor"))
+                .. (record.deaths > 0 and L("deathCountSuffix", record.deaths) or ""))
         end
     end
     local selected = selectionSize(offer.selected)
-    review.count:SetText(("Позначено %d з %d"):format(selected, #offer.changes))
+    review.count:SetText(L("reviewCount", selected, #offer.changes))
     enabled(review.confirm, selected > 0)
 end
 
@@ -1082,7 +1134,7 @@ local function createReview()
     local reviewRowHeight = 52
     root.rows = {}
     tinsert(UISpecialFrames, "GuildAvengerReview")
-    label(root, "GameFontNormalLarge", color.gold, "Імпорт Книги Образ"):SetPoint("TOPLEFT", 18, -15)
+    label(root, "GameFontNormalLarge", color.gold, L("importTitle")):SetPoint("TOPLEFT", 18, -15)
     root.sender = label(root, "GameFontHighlight", color.white)
     root.sender:SetPoint("TOPLEFT", 18, -43)
     root.summary = label(root, "GameFontHighlightSmall", color.muted)
@@ -1096,7 +1148,7 @@ local function createReview()
         root.scroll:SetValue(root.scroll:GetValue() - delta)
     end)
     fill(list, color.inset, 0, 0)
-    root.empty = label(list, "GameFontHighlight", color.muted, "Нових записів або оновлень немає.")
+    root.empty = label(list, "GameFontHighlight", color.muted, L("importEmpty"))
     root.empty:SetPoint("CENTER")
     for index = 1, rowCount do
         local row = CreateFrame("Frame", nil, list)
@@ -1124,9 +1176,9 @@ local function createReview()
         row.comment = commentPreview(row, row.detail, 405, 1, function()
             local change = row.change
             if change.changedNote then
-                local before = change.oldNote ~= "" and change.oldNote or "Без коментаря"
-                local after = change.record.note ~= "" and change.record.note or "Без коментаря"
-                return "Було\n" .. before .. "\n\nПропонують\n" .. after
+                local before = change.oldNote ~= "" and change.oldNote or L("noNote")
+                local after = change.record.note ~= "" and change.record.note or L("noNote")
+                return L("noteChange", before, after)
             end
             return change.record.note
         end)
@@ -1153,9 +1205,9 @@ local function createReview()
     root.scroll:SetScript("OnValueChanged", renderReview)
     root.count = label(root, "GameFontHighlightSmall", color.muted)
     root.count:SetPoint("TOPLEFT", 18, -470)
-    button(root, "Позначити всі", 110, function() selectAll(true) end):SetPoint("BOTTOMLEFT", 18, 15)
-    button(root, "Зняти всі", 83, function() selectAll(false) end):SetPoint("BOTTOMLEFT", 135, 15)
-    root.confirm = button(root, "Прийняти", 102, function()
+    button(root, L("selectAll"), 110, function() selectAll(true) end):SetPoint("BOTTOMLEFT", 18, 15)
+    button(root, L("clearAll"), 83, function() selectAll(false) end):SetPoint("BOTTOMLEFT", 135, 15)
+    root.confirm = button(root, L("accept"), 102, function()
         local offer = root.offer
         local selected = {}
         for _, change in ipairs(offer.changes) do
@@ -1167,7 +1219,7 @@ local function createReview()
         offer.accept(selected)
     end)
     root.confirm:SetPoint("BOTTOMRIGHT", -18, 15)
-    root.cancel = button(root, "Відхилити", 102, function() root:Hide() end)
+    root.cancel = button(root, L("decline"), 102, function() root:Hide() end)
     root.cancel:SetPoint("RIGHT", root.confirm, "LEFT", -7, 0)
     root:SetScript("OnHide", function()
         root.offer = nil
@@ -1185,8 +1237,8 @@ presentOffer = function()
     table.sort(offer.changes, function(left, right) return left.record.name < right.record.name end)
     offer.selected = {}
     review.offer = offer
-    review.sender:SetText("Відправник: " .. offer.sender)
-    review.summary:SetText(("Нові: %d · Оновлення: %d · На вилучення: %d"):format(offer.added, offer.updated, offer.removed or 0))
+    review.sender:SetText(L("sender", offer.sender))
+    review.summary:SetText(L("reviewSummary", offer.added, offer.updated, offer.removed or 0))
     review.empty:SetShown(#offer.changes == 0)
     local maximum = math.max(0, #offer.changes - rowCount)
     review.scroll:SetMinMaxValues(0, maximum)
@@ -1216,16 +1268,16 @@ function addon.InitMenus()
         end
         local _, name = addon.EnemyUnit(unit)
         if name then
-            rootDescription:CreateButton("Внести в Книгу Образ", function()
+            rootDescription:CreateButton(L("addToWatchlist"), function()
                 openDialog({
-                    title = "Внести в Книгу Образ",
-                    text = name .. "\nКоментар (необов’язково)",
-                    limit = addon.NoteLimit, confirm = "Додати",
+                    title = L("addToWatchlist"),
+                    text = name .. "\n" .. L("optionalNote"),
+                    limit = addon.NoteLimit, confirm = L("add"),
                     action = function(note) return addon.Add(name, note, unit) end,
                 })
             end)
             if addon.EnemyEntry(unit, "G") then
-                rootDescription:CreateButton("Внести гільдію в Книгу Образ", function() addon.PromptGuild(unit) end)
+                rootDescription:CreateButton(L("addGuildToWatchlist"), function() addon.PromptGuild(unit) end)
             end
         end
     end
@@ -1276,10 +1328,10 @@ local function refreshAlertButtons()
     end
     if not targetButton then
         -- Siblings keep the visual alert dismissible while protected buttons are locked.
-        targetButton = secured("У ціль", 70)
+        targetButton = secured(L("target"), 70)
         targetButton:SetAttribute("type", "macro")
         if C_Ping and C_Ping.IsPingSystemEnabled then
-            pingButton = secured("Пінг небезпеки", 132)
+            pingButton = secured(L("dangerPing"), 132)
             pingButton:SetAttribute("type", "macro")
             -- The numeric Warning option works in any client language.
             pingButton:SetAttribute("macrotext", "/ping [@target,harm,nodead] 2")
@@ -1383,7 +1435,7 @@ local function createAlert()
     divider:SetPoint("TOPRIGHT", -15, -59)
     divider:SetHeight(1)
     divider:SetColorTexture(0.66, 0.49, 0.25, 0.55)
-    root.priority = label(root, "GameFontHighlightSmall", color.gold, "Високий")
+    root.priority = label(root, "GameFontHighlightSmall", color.gold, L("high"))
     root.priority:SetPoint("BOTTOMLEFT", 15, 14)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)

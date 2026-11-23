@@ -1,9 +1,8 @@
 local addonName, addon = ...
+local L = addon.Text
 local prefix = "GuildAvenger2"
 local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
 local downloadURL = "https://github.com/DunkleCthulhu/guild-avenger/releases/latest"
-local projectInfo = "Безкоштовний аддон з відкритим кодом. Для розваги, без монетизації."
-local downloadLink = "|Haddon:GuildAvengerDownload|h[GitHub · завантажити]|h"
 local maxEntries = 1000
 local results = Enum.SendAddonMessageResult
 local roster, rosterScope, rosterRequestedAt = {}, nil, nil
@@ -21,12 +20,16 @@ end
 
 local installedRank = versionRank(version) or 0
 
-local function installMessage(release)
-    return ("Guild Avenger v%s. Встановити/оновити: %s · %s"):format(release, downloadURL, projectInfo)
+local function installMessage(release, language)
+    return addon.TextFor(language, "installMessage", release, downloadURL, addon.TextFor(language, "projectInfo"))
+end
+
+local function downloadLink()
+    return ("|Haddon:GuildAvengerDownload|h[%s]|h"):format(L("downloadLinkLabel"))
 end
 
 function addon.OpenDownload()
-    addon.PromptDownload(downloadURL, projectInfo)
+    addon.PromptDownload(downloadURL, L("projectInfo"))
 end
 
 local function guildScope()
@@ -111,7 +114,7 @@ end
 
 local function sendNext()
     if not addon.UpdateScope() or sending.scope ~= guildScope() or not addon.IsGuildMember(sending.key) then
-        stopSending("Передавання зупинено: одержувач більше не підтверджений у ростері.")
+        stopSending(L("recipientLeftRoster"))
         return
     end
     local member = roster[sending.key]
@@ -119,18 +122,18 @@ local function sendNext()
     if result == results.AddonMessageThrottle or result == results.ChannelThrottle
         or result == results.AddOnMessageLockdown then
         if GetTime() - sending.progressAt > 45 then
-            stopSending("WoW тимчасово заблокував передавання. Спробуйте знову поза боєм.")
+            stopSending(L("transferBlocked"))
         end
         return
     end
     if result ~= results.Success then
-        stopSending("Не вдалося надіслати список " .. member.name .. ".")
+        stopSending(L("transferFailed", member.name))
         return
     end
     sending.position = sending.position + 1
     sending.progressAt = GetTime()
     if sending.position > #sending.packets then
-        stopSending("Список надіслано " .. member.name .. " для підтвердження.")
+        stopSending(L("transferDone", member.name))
     end
 end
 
@@ -153,7 +156,7 @@ local function recipient(input)
         local first = rosterKey:match("^(%S+)")
         if first == typed then
             if exact then
-                return nil, "Кілька гільдійців мають це ім’я. Введіть також прізвище."
+                return nil, L("ambiguousRecipient")
             end
             exact = rosterKey
         end
@@ -163,29 +166,29 @@ end
 
 function addon.Share(input, selection, includeRemovals)
     if sending then
-        return false, "Дочекайтеся завершення поточного передавання."
+        return false, L("transferInProgress")
     end
     if not addon.UpdateScope() or not guildScope() then
-        return false, "Передавання доступне лише учасникам гільдії."
+        return false, L("sharingRequiresGuild")
     end
     addon.RefreshRoster()
     if rosterScope ~= guildScope() then
-        return false, "WoW ще завантажує ростер гільдії. Спробуйте за мить."
+        return false, L("rosterLoading")
     end
     local key, message = recipient(input)
     if not key or key == addon.UnitName("player") or not addon.IsGuildMember(key) then
-        return false, message or "Введіть ім’я гільдійця або виберіть його ціллю."
+        return false, message or L("enterRecipient")
     end
     local member = roster[key]
     if not member.online then
-        return false, member.name .. " зараз не в мережі."
+        return false, L("recipientOffline", member.name)
     end
     local packets, message = makePackets(selection, includeRemovals)
     if not packets then
         return false, message
     end
     enqueue(key, packets)
-    return true, "Починаю передавання " .. member.name .. "."
+    return true, L("transferStarted", member.name)
 end
 
 makePackets = function(selection, includeRemovals)
@@ -198,10 +201,10 @@ makePackets = function(selection, includeRemovals)
         end
     end
     if #entries + #removals == 0 then
-        return nil, "Немає записів для передавання."
+        return nil, L("nothingToShare")
     end
     if #entries + #removals > maxEntries then
-        return nil, "За одне передавання можна надіслати до 1000 записів."
+        return nil, L("tooManyEntries")
     end
 
     sequence = sequence % 65535 + 1
@@ -241,10 +244,10 @@ end
 
 function addon.Publish(selection, includeRemovals)
     if not addon.UpdateScope() or not guildScope() then
-        return false, "Публікація доступна учасникам гільдії."
+        return false, L("publishingRequiresGuild")
     end
     if C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
-        return false, "WoW тимчасово обмежив повідомлення в чаті."
+        return false, L("chatLockdown")
     end
     local packets, id = makePackets(selection, includeRemovals)
     if not packets then
@@ -258,28 +261,29 @@ function addon.Publish(selection, includeRemovals)
     end
     published[id] = { packets = packets, at = now, scope = guildScope(), requested = {} }
     C_ChatInfo.SendChatMessage("[Guild Avenger " .. id .. "]", "GUILD")
-    C_ChatInfo.SendChatMessage(installMessage(version), "GUILD")
-    return true, "Посилання на список опубліковано в чаті гільдії."
+    C_ChatInfo.SendChatMessage(installMessage(version, addon.Language()), "GUILD")
+    return true, L("listPublished")
 end
 
 local function chatFilter(_, _, message, sender, ...)
     if not addon.IsText(message) then
         return false
     end
-    local release = message:match("^GuildAvenger v([%d.]+)%. ")
+    local release = message:match("^Guild Avenger v([%d.]+)%. ")
     local availableRank = release and versionRank(release)
-    if availableRank and message == installMessage(release) then
+    -- Plain guild chat uses the sender's language. Addon links use the reader's language.
+    if availableRank and (message == installMessage(release, "ukUA") or message == installMessage(release, "enUS")) then
         if availableRank <= installedRank then
             return true
         end
-        return false, ("Guild Avenger %s · %s · %s"):format(release, downloadLink, projectInfo), sender, ...
+        return false, ("Guild Avenger %s · %s · %s"):format(release, downloadLink(), L("projectInfo")), sender, ...
     end
     local id = message:match("^%[Guild Avenger ([%da-f]+%.[%da-f]+)%]$")
     local key = id and #id <= 16 and addon.PlayerName(sender, true)
     if not key then
         return false
     end
-    local link = ("|Haddon:GuildAvenger:%s:%s|h[Перелік Guild Avenger]|h"):format(id, key)
+    local link = ("|Haddon:GuildAvenger:%s:%s|h[%s]|h"):format(id, key, L("shareLinkLabel"))
     return false, link, sender, ...
 end
 
@@ -296,20 +300,20 @@ local function requestLink(_, link, _, mouseButton)
         return
     end
     if sender == addon.UnitName("player") then
-        addon.Say("Ти опублікував цей список. Гільдійці з аддоном можуть відкрити його за посиланням.")
+        addon.Say(L("ownShareLink"))
         return
     end
     addon.RefreshRoster()
     local member = addon.IsGuildMember(sender) and roster[sender]
     if not member or not member.online then
-        addon.Say("Автор посилання має бути онлайн у вашій гільдії.")
+        addon.Say(L("shareAuthorOffline"))
         return
     end
     local result = C_ChatInfo.SendAddonMessage(prefix, "Q\t" .. id, "WHISPER", member.name)
     if result == results.Success then
-        addon.Say("Запит надіслано. Список з’явиться після отримання всіх записів.")
+        addon.Say(L("shareRequestSent"))
     else
-        addon.Say("WoW не прийняв запит. Спробуйте ще раз.")
+        addon.Say(L("shareRequestFailed"))
     end
 end
 
@@ -332,11 +336,11 @@ local function finish(sender, batch)
     for _, change in ipairs(changes or {}) do planned[change.key] = change end
     addon.OfferImport(roster[sender].name, added, updated, changes or {}, function(selection)
         if not addon.UpdateScope() or guildScope() ~= batch.scope or not addon.IsGuildMember(sender) then
-            addon.Say("Імпорт скасовано: відправник більше не підтверджений у ростері.")
+            addon.Say(L("importSenderLeft"))
             return
         end
         local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, batch.explicit, planned)
-        addon.Say(("Імпорт завершено. Додано %d, оновлено %d, вилучено %d."):format(newEntries, updatedEntries, removedEntries or 0))
+        addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
     end, removed)
 end
 
@@ -388,7 +392,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
             batch.version = data
             batch.explicit = senderRank >= 2004000
             if senderRank > installedRank then
-                addon.Say(("Список надіслано з новішої версії Guild Avenger %s. %s"):format(data, downloadLink))
+                addon.Say(L("shareNewerVersion", data, downloadLink()))
             end
         end
         return

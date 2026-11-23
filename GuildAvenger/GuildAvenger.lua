@@ -1,4 +1,5 @@
 local addonName, addon = ...
+local L = addon.Text
 local frame = CreateFrame("Frame")
 local listID, entries
 local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
@@ -7,8 +8,6 @@ local cooldown = 30
 local deathCooldown = 8
 local guildObservationLifetime = 120
 local nameLimit, noteLimit = 96, 104
-local unavailable = "Зачекайте, поки WoW завантажить вашу гільдію."
-local invalidEnemy = "Виберіть доступного для атаки гравця протилежної фракції поза вашою групою й гільдією."
 
 addon.NameLimit, addon.NoteLimit = nameLimit, noteLimit
 
@@ -271,14 +270,14 @@ local function warn(key, entry, player, unit, guid)
         return
     end
     alerts[key] = now
-    local guild = entry.kind == "G" and "Гільдія «" .. entry.name .. "»" or ""
+    local guild = entry.kind == "G" and L("guildNameQuoted", entry.name) or ""
     local reason = entry.note ~= "" and " — " .. entry.note or ""
-    local heading = entry.high and "Високий пріоритет: " or "Ворог поруч: "
-    say(heading .. player .. (guild ~= "" and " — " .. guild or "") .. reason)
+    local heading = L(entry.high and "highAlert" or "nearbyAlert", player)
+    say(heading .. (guild ~= "" and " — " .. guild or "") .. reason)
     local count = addon.EnemyScore(guid)
     local note = guild ~= "" and guild .. reason or entry.note
     if count > 0 then
-        local score = ("Вбивств гільдійців: %d"):format(count)
+        local score = L("guildmateKills", count)
         note = note ~= "" and (score .. " · " .. note) or score
     end
     addon.ShowAlert({ name = player, note = note,
@@ -411,17 +410,17 @@ end
 
 local function addEnemy(input, reason, fromUnit, kind)
     if not updateScope() then
-        return false, unavailable
+        return false, L("guildLoading")
     end
     local unit = fromUnit or "target"
     local wanted, writtenName
     if input ~= "" then
         wanted, writtenName = entryName(input, kind)
         if not wanted then
-            return false, kind == "G" and "Введіть назву гільдії." or "Введіть повне ім’я персонажа."
+            return false, kind == "G" and L("enterGuildName") or L("enterCharacterName")
         end
         if kind ~= "G" and isAllyName(wanted) then
-            return false, invalidEnemy
+            return false, L("invalidEnemy")
         end
         if not fromUnit or wanted ~= enemyEntry(fromUnit, kind) then
             unit = visibleEnemy(wanted, kind)
@@ -432,25 +431,25 @@ local function addEnemy(input, reason, fromUnit, kind)
     if kind == "G" and wanted and not fromUnit and not key then
         local ownGuild = guildName((GetGuildInfo("player")))
         if IsInGuild() and not ownGuild then
-            return false, unavailable
+            return false, L("guildLoading")
         end
         if wanted == ownGuild then
-            return false, "Власну гільдію додати не можна."
+            return false, L("ownGuild")
         end
         key, name = wanted, writtenName
     end
     if not key then
         if wanted and kind ~= "G" then
-            return false, "WoW має бачити цього персонажа, щоб перевірити, що він ворог."
+            return false, L("characterNotVisible")
         end
-        return false, kind == "G" and "Виберіть доступного ворога, чию гільдію видно." or invalidEnemy
+        return false, kind == "G" and L("guildNotVisible") or L("invalidEnemy")
     end
     if entries[key] then
-        return false, "Цей запис уже в Книзі Образ."
+        return false, L("alreadyListed")
     end
     local note = clean(reason, noteLimit)
     if not note then
-        return false, "Коментар надто довгий або містить недопустимі символи."
+        return false, L("invalidNote")
     end
     local _, author = unitName("player")
     local entry = { name = name, note = note, author = author or "", addedAt = GetServerTime(),
@@ -465,24 +464,24 @@ local function addEnemy(input, reason, fromUnit, kind)
         remember(entry, key, faction, guid)
     end
     addon.RefreshUI()
-    return true, "Додано " .. name .. "."
+    return true, L("entryAdded", name)
 end
 
 local function changeNote(input, reason, kind, selected)
     if not updateScope() then
-        return false, unavailable
+        return false, L("guildLoading")
     end
     local key = selected and recordKey(selected) or entryName(input, kind)
     if not key or not entries[key] then
-        return false, "Запису немає в Книзі Образ."
+        return false, L("entryMissing")
     end
     local note = clean(reason, noteLimit)
     if not note then
-        return false, "Коментар надто довгий або містить недопустимі символи."
+        return false, L("invalidNote")
     end
     entries[key].note = note
     addon.RefreshUI()
-    return true, "Коментар збережено."
+    return true, L("noteSaved")
 end
 
 local function removeEntry(key, entry, rememberRemoval)
@@ -495,7 +494,7 @@ end
 
 local function deleteEnemy(input, kind, selected)
     if not updateScope() then
-        return false, unavailable
+        return false, L("guildLoading")
     end
     local key
     if selected then
@@ -509,11 +508,11 @@ local function deleteEnemy(input, kind, selected)
     end
     local entry = key and entries[key]
     if not entry then
-        return false, "Запису немає в Книзі Образ."
+        return false, L("entryMissing")
     end
     removeEntry(key, entry, true)
     addon.RefreshUI()
-    return true, "Вилучено " .. entry.name .. "."
+    return true, L("entryRemoved", entry.name)
 end
 
 function addon.DeleteSelection(selection, scope)
@@ -538,16 +537,16 @@ local function eligibleRecord(key, entry)
 end
 
 function addon.AddRankedEnemy(guid)
-    if not updateScope() then return false, unavailable end
+    if not updateScope() then return false, L("guildLoading") end
     local enemy = addon.RankedEnemy(guid)
-    if not enemy then return false, "Немає підтвердженого запису в рейтингу." end
+    if not enemy then return false, L("rankedEntryMissing") end
     local pendingKey = "pending:" .. guid:upper()
     local nameKey = enemy.name:find(" ", 1, true) and playerName(enemy.name)
-    if nameKey and isAllyName(nameKey) then return false, invalidEnemy end
+    if nameKey and isAllyName(nameKey) then return false, L("invalidEnemy") end
     if entries[pendingKey] or knownGUIDs[guid] or (nameKey and entries[nameKey]) then
-        return false, "Цей ворог уже в Книзі Образ."
+        return false, L("enemyAlreadyListed")
     end
-    local note = "Додано з рейтингу «Вороги»."
+    local note = L("rankedEnemyNote")
     local unit = UnitTokenFromGUID and UnitTokenFromGUID(guid)
     local key, name = enemyUnit(unit)
     if key then return addEnemy(name, note, unit) end
@@ -556,7 +555,7 @@ function addon.AddRankedEnemy(guid)
         kind = "P", deaths = 0, guid = guid, pending = true }
     if nameKey then removalLog()[nameKey] = nil end
     addon.RefreshUI()
-    return true, "Додано " .. enemy.name .. ". WoW звірить ім’я та фракцію при зустрічі."
+    return true, L("rankedEnemyAdded", enemy.name)
 end
 
 function addon.RemovalProposals()
@@ -661,12 +660,13 @@ local function splitAdd(input)
 end
 
 local function showHelp()
-    say("/gavenger або /gavenger ui — відкрити книгу · /gavenger list — показати записи в чаті")
-    say("/gavenger add [Ім’я Прізвище] [Коментар] · /gavenger del [Ім’я Прізвище]")
-    say('/gavenger guild add ["Назва гільдії"] [Коментар] · /gavenger guild del [Назва гільдії]')
-    say("/gavenger share [Ім’я Прізвище] — гільдійцю · /gavenger share guild — у чат гільдії")
-    say("/gavenger test [high] — перевірити сповіщення · /gavenger download — посилання на GitHub")
-    say("/gavenger stats — журнал смертей і гільдійні рейтинги")
+    say(L("helpOverview"))
+    say(L("helpCharacters"))
+    say(L("helpGuilds"))
+    say(L("helpSharing"))
+    say(L("helpAlerts"))
+    say(L("helpStats"))
+    say(L("helpSettings"))
 end
 
 local function slash(input)
@@ -687,7 +687,7 @@ local function slash(input)
         elseif operation == "del" or operation == "remove" then
             _, message = deleteEnemy(guild, "G")
         else
-            message = "/gavenger guild add [Назва], /gavenger guild del [Назва]"
+            message = L("guildCommandUsage")
         end
     elseif command == "del" or command == "remove" then
         _, message = deleteEnemy(rest)
@@ -698,21 +698,23 @@ local function slash(input)
             _, message = addon.Share(rest)
         end
     elseif command == "test" then
-        addon.ShowAlert({ name = "Guild Avenger", note = "Тест сповіщення.", unit = "player",
+        addon.ShowAlert({ name = "Guild Avenger", note = L("testAlert"), unit = "player",
             high = rest:lower() == "high" }, true)
     elseif command == "download" then
         addon.OpenDownload()
     elseif command == "stats" then
         addon.OpenStats()
+    elseif command == "settings" then
+        addon.PromptSettings()
     elseif command == "list" then
         local list = sortedEntries()
-        say(#list == 0 and "Книга порожня." or ("Записів у Книзі Образ: %d"):format(#list))
+        say(#list == 0 and L("emptyListChat") or L("entryCountChat", #list))
         for _, entry in ipairs(list) do
-            local name = entry.kind == "G" and ("Гільдія «%s»"):format(entry.name) or entry.name
-            say((entry.high and "[Високий] " or "[Звичайний] ") .. ("%s · смертей: %d"):format(name, entry.deaths))
+            local name = entry.kind == "G" and L("guildNameQuoted", entry.name) or entry.name
+            say((entry.high and L("chatHigh") or L("chatNormal")) .. L("chatEntryDeaths", name, entry.deaths))
         end
     else
-        message = "Невідома команда. Введіть /gavenger help."
+        message = L("unknownCommand")
     end
     if message then
         say(message)
@@ -721,7 +723,9 @@ end
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" and (...) == addonName then
+        local hadSettings = GuildAvengerDB ~= nil or GuildAvengerLegacyDB ~= nil
         GuildAvengerDB = GuildAvengerDB or {}
+        addon.InitLanguage(hadSettings)
         GuildAvengerDB.lists = GuildAvengerDB.lists or {}
         GuildAvengerDB.guildsImported = GuildAvengerDB.guildsImported or {}
         GuildAvengerDB.sound = GuildAvengerDB.sound or {}

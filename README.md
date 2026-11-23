@@ -1,12 +1,16 @@
-# Guild Avenger 3.0.1
+# Guild Avenger
 
 **English** · [Українська](README.uk.md)
 
-Guild Avenger is a free, open-source PvP addon for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates. The in-game interface is in Ukrainian.
+Guild Avenger is a free, open-source PvP addon for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates.
 
 ## Installation
 
-Extract `GuildAvenger-3.0.1.zip` into `World of Warcraft/_forever_/Interface/AddOns/`. The addon appears in the addon menu as **Guild Avenger**. Type `/gavenger` or click the book icon beside the minimap. Drag the icon to move it around the minimap. [GitHub releases](https://github.com/DunkleCthulhu/guild-avenger/releases)
+Extract the Guild Avenger release ZIP into `World of Warcraft/_forever_/Interface/AddOns/`. The addon appears in the addon menu as **Guild Avenger**. Type `/gavenger` or click the book icon beside the minimap. Drag the icon to move it around the minimap. [GitHub releases](https://github.com/DunkleCthulhu/guild-avenger/releases)
+
+### Interface language
+
+Starting with 3.1.0, open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. Choose **English** or **Українська** and click **Apply and reload UI**. Upgrades from earlier versions start in Ukrainian. Fresh installs start in English unless WoW reports a Ukrainian locale. Your choice is saved between sessions.
 
 ### Migrating from GrudgeBook or Forever Watch
 
@@ -52,6 +56,7 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger download` | Open a window with a copyable GitHub link. |
 | `/gavenger help` | Show command help. |
 | `/gavenger stats` | Open the personal death journal and guild rankings. |
+| `/gavenger settings` | Choose the addon language. |
 
 ## Sharing watchlists
 
