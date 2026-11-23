@@ -1,4 +1,4 @@
-local addonName = ...
+local addonName, addon = ...
 local frame = CreateFrame("Frame")
 local prefix = "ForeverWatch1"
 local results = Enum.SendAddonMessageResult
@@ -7,6 +7,10 @@ local pending = {}
 local sendTicker
 local plates, lastSeen = {}, {}
 local maxRevision = 2147483647
+local waitingForGuild = "Список доступний після підключення до гільдії."
+local maxNoteBytes = 104
+
+addon.MaxNoteBytes = maxNoteBytes
 
 local function readable(value)
     return not issecretvalue or not issecretvalue(value)
@@ -18,12 +22,6 @@ end
 
 local function say(message)
     DEFAULT_CHAT_FRAME:AddMessage("|cff56d6bfForever Watch|r " .. message)
-end
-
-local function alert(message)
-    say(message)
-    UIErrorsFrame:AddMessage(message, 1, 0.79, 0.32, 1)
-    PlaySound(SOUNDKIT.RAID_WARNING)
 end
 
 local cyrillicLower = {}
@@ -119,12 +117,13 @@ local function scanPlate(unit)
     end
     lastSeen[sighting] = now + 15
     if entry.kind == "P" then
-        alert("Поруч персонаж зі списку PvP " .. entry.name)
+        say("Поруч персонаж зі списку PvP " .. entry.name)
     elseif playerName then
-        alert("Поруч " .. playerName .. " з гільдії «" .. entry.name .. "».")
+        say("Поруч " .. playerName .. " з гільдії «" .. entry.name .. "».")
     else
-        alert("Поруч гравець із гільдії «" .. entry.name .. "».")
+        say("Поруч гравець із гільдії «" .. entry.name .. "».")
     end
+    addon.ShowAlert(entry, playerName)
 end
 
 local function scanPlates()
@@ -159,10 +158,11 @@ local function updateGuild()
         plates[unit] = false
     end
     scanPlates()
+    addon.RefreshPanel()
     return true
 end
 
-local function applyEntry(key, kind, name, revision, removed)
+local function applyEntry(key, kind, name, revision, removed, note)
     local previous = entries[key]
     if previous then
         if previous.revision > revision then
@@ -172,13 +172,19 @@ local function applyEntry(key, kind, name, revision, removed)
             if previous.removed and not removed then
                 return
             end
-            if previous.removed == removed and previous.name <= name then
-                return
+            if previous.removed == removed then
+                if previous.name < name then
+                    return
+                end
+                if previous.name == name and (note == nil or (previous.note and previous.note <= note)) then
+                    return
+                end
             end
         end
     end
-    entries[key] = { kind = kind, name = name, revision = revision, removed = removed }
+    entries[key] = { kind = kind, name = name, revision = revision, removed = removed, note = note }
     scanPlates()
+    addon.RefreshPanel()
 end
 
 local function sendNext()
@@ -194,6 +200,11 @@ local function sendNext()
     local entry = entries[key]
     local operation = entry.removed and "D" or "A"
     local message = ("%s\t%s\t%s\t%d\t%s"):format(listID, operation, entry.kind, entry.revision, entry.name)
+    -- Send the original format first so earlier versions still receive list changes.
+    local includesNote = pending[key] == entry and entry.note ~= nil
+    if includesNote then
+        message = message .. "\t" .. entry.note
+    end
     local result = C_ChatInfo.SendAddonMessage(prefix, message, "GUILD")
     if result == results.AddonMessageThrottle or result == results.ChannelThrottle
         or result == results.AddOnMessageLockdown then
@@ -205,7 +216,7 @@ local function sendNext()
         say("Гільдійна синхронізація призупинена. Для повтору введіть /fw share.")
         return
     end
-    pending[key] = nil
+    pending[key] = not includesNote and entry.note ~= nil and entry or nil
 end
 
 local function startSending()
@@ -214,111 +225,183 @@ local function startSending()
     end
 end
 
+local function normalizedNote(note)
+    if textValue(note) and #note <= maxNoteBytes and not note:find("[%c|]") then
+        return note:match("^%s*(.-)%s*$")
+    end
+end
+
 local function onGuildMessage(messagePrefix, message, channel)
     if not textValue(messagePrefix) or messagePrefix ~= prefix
         or not textValue(channel) or channel ~= "GUILD"
-        or not textValue(message) or #message > 160 then
+        or not textValue(message) or #message > 240 then
         return
     end
     if not updateGuild() then
         return
     end
-    local id, operation, kind, revisionText, name = message:match("^([^\t]+)\t([AD])\t([PG])\t(%d+)\t([^\t]+)$")
+    local id, operation, kind, revisionText, name, suffix =
+        message:match("^([^\t]+)\t([AD])\t([PG])\t(%d+)\t([^\t]+)(.*)$")
     if not entries or listID == "local" or id ~= listID then
         return
     end
     local key, display = watchName(kind, name)
     local revision = tonumber(revisionText)
+    local note
+    if suffix ~= "" then
+        note = suffix:sub(1, 1) == "\t" and operation == "A" and normalizedNote(suffix:sub(2))
+        if not note then
+            return
+        end
+    end
     if key and revision and revision >= 1 and revision <= maxRevision then
-        applyEntry(key, kind, display, revision, operation == "D")
+        applyEntry(key, kind, display, revision, operation == "D", note)
     end
 end
 
-local function editEntry(kind, input, removed)
+local function targetName(kind)
+    if not isPlayerUnit("target") then
+        return
+    end
+    if kind == "G" then
+        return guildName("target")
+    end
+    return characterName("target")
+end
+
+local function editEntry(kind, input, operation, note)
+    if not updateGuild() then
+        return false, waitingForGuild
+    end
     local key, name
     if input ~= "" then
         key, name = watchName(kind, input)
-    elseif isPlayerUnit("target") then
-        if kind == "G" then
-            key, name = guildName("target")
-        else
-            key, name = characterName("target")
-        end
+    else
+        key, name = targetName(kind)
     end
     if not key then
-        say(kind == "G" and "Введіть назву гільдії або виберіть її учасника."
-            or "Виберіть персонажа або введіть його ім’я та прізвище.")
-        return
+        return false, kind == "G" and "Введіть назву гільдії або виберіть її учасника."
+            or "Виберіть персонажа або введіть його ім’я та прізвище."
     end
     local previous = entries[key]
-    if (previous and previous.removed == removed) or (removed and not previous) then
-        say(removed and "Цього запису немає у списку." or "Цей запис уже є у списку.")
-        return
+    local active = previous and not previous.removed
+    local removed = operation == "remove"
+    if operation == "add" and active then
+        return false, "Цей запис уже є у списку."
+    end
+    if operation ~= "add" and not active then
+        return false, "Цього запису немає у списку."
+    end
+    if note ~= nil then
+        note = normalizedNote(note)
+        if note == nil then
+            return false, "Причина містить недопустимі символи або надто довга."
+        end
+    end
+    if operation == "note" then
+        if (previous.note or "") == note then
+            return true, "Причина збережена.", previous.name
+        end
+        name = previous.name
+    elseif note == "" then
+        note = nil
     end
     local revision = previous and previous.revision + 1 or 1
     if revision > maxRevision then
-        say("Досягнуто максимальної ревізії запису.")
-        return
+        return false, "Досягнуто максимальної ревізії запису."
     end
-    applyEntry(key, kind, name, revision, removed)
+    applyEntry(key, kind, name, revision, removed, note)
     if listID ~= "local" then
         pending[key] = true
         startSending()
     end
-    say((removed and "Вилучено " or "Додано ") .. name)
+    local message = operation == "note" and "Причина збережена." or (removed and "Вилучено " or "Додано ") .. name
+    return true, message, name
+end
+
+local function getLists()
+    local players, guilds = {}, {}
+    if entries then
+        for _, entry in pairs(entries) do
+            if not entry.removed then
+                local names = entry.kind == "G" and guilds or players
+                names[#names + 1] = entry
+            end
+        end
+    end
+    local function byName(left, right) return left.name < right.name end
+    table.sort(players, byName)
+    table.sort(guilds, byName)
+    return players, guilds, listID
 end
 
 local function showList()
-    local players, guilds = {}, {}
-    for _, entry in pairs(entries) do
-        if not entry.removed then
-            local names = entry.kind == "G" and guilds or players
-            names[#names + 1] = entry.name
-        end
+    if not updateGuild() then
+        say(waitingForGuild)
+        return
     end
-    table.sort(players)
-    table.sort(guilds)
+    local players, guilds = getLists()
     say(("Персонажів %d, гільдій %d"):format(#players, #guilds))
-    for _, name in ipairs(players) do
-        say("Персонаж " .. name)
+    for _, entry in ipairs(players) do
+        say("Персонаж " .. entry.name .. (entry.note and entry.note ~= "" and " — " .. entry.note or ""))
     end
-    for _, name in ipairs(guilds) do
-        say("Гільдія " .. name)
+    for _, entry in ipairs(guilds) do
+        say("Гільдія " .. entry.name .. (entry.note and entry.note ~= "" and " — " .. entry.note or ""))
     end
 end
+
+local function shareList()
+    if not updateGuild() then
+        return false, waitingForGuild
+    end
+    if listID == "local" then
+        return false, "Для поширення списку потрібно бути в гільдії."
+    end
+    for key in pairs(entries) do
+        pending[key] = true
+    end
+    if not next(pending) then
+        return false, "Список порожній."
+    end
+    startSending()
+    return true, "Список поставлено в чергу для гільдії."
+end
+
+addon.GetLists = getLists
+addon.EditEntry = editEntry
+addon.ShareList = shareList
+addon.GetTargetName = targetName
+addon.GetPlayerName = function() return characterName("player") end
 
 local function commands(input)
     local command, rest = input:match("^%s*(%S*)%s*(.-)%s*$")
     command = command:lower()
+    if command == "" then
+        updateGuild()
+        addon.TogglePanel()
+        return
+    end
     local kind = "P"
     if command == "guild" then
         kind = "G"
         command, rest = rest:match("^(%S*)%s*(.-)%s*$")
         command = command:lower()
     end
-    local editing = command == "add" or command == "remove"
-    if not editing and (kind == "G" or (command ~= "list" and command ~= "share")) then
+    if command == "add" or command == "remove" then
+        local _, message = editEntry(kind, rest, command)
+        say(message)
+    elseif kind == "P" and command == "list" then
+        showList()
+    elseif kind == "P" and command == "share" then
+        local _, message = shareList()
+        say(message)
+    elseif kind == "P" and command == "test" then
+        addon.PreviewAlert()
+    else
+        say("/fw — відкрити список")
         say("/fw add або /fw remove [Ім’я Прізвище]")
         say("/fw guild add або /fw guild remove [Назва гільдії]")
-        say("/fw list, /fw share")
-        return
-    end
-    if not updateGuild() then
-        say("Список доступний після підключення до гільдії.")
-        return
-    end
-    if editing then
-        editEntry(kind, rest, command == "remove")
-    elseif command == "list" then
-        showList()
-    elseif listID == "local" then
-        say("Для поширення списку потрібно бути в гільдії.")
-    else
-        for key in pairs(entries) do
-            pending[key] = true
-        end
-        startSending()
-        say(next(pending) and "Список поставлено в чергу для гільдії." or "Список порожній.")
+        say("/fw list, /fw share, /fw test")
     end
 end
 
@@ -336,6 +419,7 @@ local function onEvent(_, event, ...)
         updateGuild()
     elseif event == "PLAYER_LEAVING_WORLD" then
         plates = {}
+        addon.CloseAlert()
     elseif event == "CHAT_MSG_ADDON" then
         onGuildMessage(...)
     else
