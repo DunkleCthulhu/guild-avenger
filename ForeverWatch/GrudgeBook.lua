@@ -92,6 +92,11 @@ local function entryName(value, kind)
     return playerName(value)
 end
 
+local function recordKey(entry)
+    if entry.pending then return "pending:" .. entry.guid:upper() end
+    return entryName(entry.name, entry.kind)
+end
+
 local function importLegacy(imported, legacy, kind)
     for _, record in pairs(type(legacy) == "table" and legacy or {}) do
         if type(record) == "table" and record.kind == kind and not record.removed then
@@ -226,6 +231,31 @@ local function remember(entry, key, faction, guid)
     end
 end
 
+local function trackedPlayer(key, name, guid)
+    local entry = entries[key]
+    local pending = guid and entries["pending:" .. guid:upper()]
+    if pending then
+        entries[recordKey(pending)] = nil
+        if not entry then
+            pending.name, pending.pending = name, nil
+            entries[key], entry = pending, pending
+        else
+            knownGUIDs[guid] = nil
+        end
+        if entry.guid == guid then knownGUIDs[guid] = key end
+        addon.RefreshUI()
+    end
+    return entry
+end
+
+local function sighting(entry, now, zone)
+    if not entry then return false end
+    local previous = entry.seen
+    if previous and previous.zone == zone and now - previous.at < 30 then return false end
+    entry.seen = { at = now, zone = zone }
+    return true
+end
+
 local function matchGuild(unit, key, faction, guid)
     local guildKey = guildName((GetGuildInfo(unit)))
     local guild = guildKey and entries[guildKey]
@@ -235,7 +265,7 @@ local function matchGuild(unit, key, faction, guid)
     return guild
 end
 
-local function warn(key, entry, player, unit)
+local function warn(key, entry, player, unit, guid)
     local now = GetTime()
     if alerts[key] and now - alerts[key] < cooldown then
         return
@@ -245,7 +275,13 @@ local function warn(key, entry, player, unit)
     local reason = entry.note ~= "" and " — " .. entry.note or ""
     local heading = entry.high and "Високий пріоритет: " or "Ворог поруч: "
     say(heading .. player .. (guild ~= "" and " — " .. guild or "") .. reason)
-    addon.ShowAlert({ name = player, note = guild ~= "" and guild .. reason or entry.note,
+    local count = addon.EnemyScore(guid)
+    local note = guild ~= "" and guild .. reason or entry.note
+    if count > 0 then
+        local score = ("Вбивств гільдійців: %d"):format(count)
+        note = note ~= "" and (score .. " · " .. note) or score
+    end
+    addon.ShowAlert({ name = player, note = note,
         kind = entry.kind, high = entry.high, unit = unit })
 end
 
@@ -257,7 +293,7 @@ local function scanUnit(unit, alreadySeen)
     if not key then
         return false
     end
-    local personal = entries[key]
+    local personal = trackedPlayer(key, name, guid)
     local guild = matchGuild(unit, key, faction, guid)
     local entry = personal or guild
     if not entry then
@@ -266,8 +302,13 @@ local function scanUnit(unit, alreadySeen)
     if personal then
         remember(personal, key, faction, guid)
     end
+    local now = GetServerTime()
+    local zone = clean(GetRealZoneText(), 140)
+    local personalSeen = sighting(personal, now, zone)
+    local guildSeen = sighting(guild, now, zone)
+    if personalSeen or guildSeen then addon.RefreshUI() end
     if key ~= alreadySeen then
-        warn(key, entry, name, unit)
+        warn(key, entry, name, unit, guid)
     end
     return key
 end
@@ -300,15 +341,15 @@ local function recordDeath(guid, killer)
     local personal = key and entries[key]
     if UnitTokenFromGUID then
         local unit = UnitTokenFromGUID(guid)
-        local candidate, _, faction, resolvedGUID = enemyUnit(unit, true)
+        local candidate, name, faction, resolvedGUID = enemyUnit(unit, true)
         if candidate and resolvedGUID == guid then
-            key, personal = candidate, entries[candidate]
+            key, personal = candidate, trackedPlayer(candidate, name, guid)
             if personal then remember(personal, key, faction, guid) end
             matchGuild(unit, key, faction, guid)
         end
     end
     local now = GetTime()
-    if personal and (personal.guid ~= guid or not isDifferentFaction(personal.faction) or isAllyName(key)) then
+    if personal and (personal.pending or personal.guid ~= guid or not isDifferentFaction(personal.faction) or isAllyName(key)) then
         personal = nil
     end
     local observation = observedGuilds[guid]
@@ -355,11 +396,17 @@ local function sortedEntries()
 end
 
 local function setPriority(entry, high)
-    local key = entryName(entry.name, entry.kind)
+    local key = recordKey(entry)
     if updateScope() and entries[key] == entry then
         entry.high = high and true or nil
         addon.RefreshUI()
     end
+end
+
+local function removalLog()
+    local logs = GrudgeBookDB.removals
+    if not logs[listID] then logs[listID] = {} end
+    return logs[listID]
 end
 
 local function addEnemy(input, reason, fromUnit, kind)
@@ -381,6 +428,7 @@ local function addEnemy(input, reason, fromUnit, kind)
         end
     end
     local key, name, faction, guid = enemyEntry(unit, kind)
+    local seenNow = key ~= nil
     if kind == "G" and wanted and not fromUnit and not key then
         local ownGuild = guildName((GetGuildInfo("player")))
         if IsInGuild() and not ownGuild then
@@ -407,7 +455,9 @@ local function addEnemy(input, reason, fromUnit, kind)
     local _, author = unitName("player")
     local entry = { name = name, note = note, author = author or "", addedAt = GetServerTime(),
         deaths = 0, kind = kind or "P" }
+    if seenNow then sighting(entry, entry.addedAt, clean(GetRealZoneText(), 140)) end
     entries[key] = entry
+    removalLog()[key] = nil
     if kind == "G" then
         local player, _, observedFaction, observedGUID = enemyUnit(unit)
         if player then matchGuild(unit, player, observedFaction, observedGUID) end
@@ -418,11 +468,11 @@ local function addEnemy(input, reason, fromUnit, kind)
     return true, "Додано " .. name .. "."
 end
 
-local function changeNote(input, reason, kind)
+local function changeNote(input, reason, kind, selected)
     if not updateScope() then
         return false, unavailable
     end
-    local key = entryName(input, kind)
+    local key = selected and recordKey(selected) or entryName(input, kind)
     if not key or not entries[key] then
         return false, "Запису немає в Книзі Образ."
     end
@@ -435,12 +485,22 @@ local function changeNote(input, reason, kind)
     return true, "Коментар збережено."
 end
 
-local function deleteEnemy(input, kind)
+local function removeEntry(key, entry, rememberRemoval)
+    if entry.guid then knownGUIDs[entry.guid] = nil end
+    if rememberRemoval and not entry.pending then
+        removalLog()[key] = { name = entry.name, kind = entry.kind, at = GetServerTime() }
+    end
+    entries[key], alerts[key] = nil, nil
+end
+
+local function deleteEnemy(input, kind, selected)
     if not updateScope() then
         return false, unavailable
     end
     local key
-    if input == "" and kind == "G" then
+    if selected then
+        key = recordKey(selected)
+    elseif input == "" and kind == "G" then
         key = guildName((GetGuildInfo("target")))
     elseif input == "" then
         key = unitName("target")
@@ -451,47 +511,109 @@ local function deleteEnemy(input, kind)
     if not entry then
         return false, "Запису немає в Книзі Образ."
     end
-    if entry.guid then
-        knownGUIDs[entry.guid] = nil
-    end
-    entries[key], alerts[key] = nil, nil
+    removeEntry(key, entry, true)
     addon.RefreshUI()
     return true, "Вилучено " .. entry.name .. "."
 end
 
+function addon.DeleteSelection(selection, scope)
+    if not updateScope() or listID ~= scope then return 0 end
+    local count = 0
+    for key, entry in pairs(selection) do
+        if entries[key] == entry then
+            removeEntry(key, entry, true)
+            count = count + 1
+        end
+    end
+    addon.RefreshUI()
+    return count
+end
+
 local function eligibleRecord(key, entry)
+    if entry.pending then return false end
     if entry.kind == "G" then
         return key ~= guildName((GetGuildInfo("player")))
     end
     return isDifferentFaction(entry.faction) and not isAllyName(key)
 end
 
-local function mergeEntries(incoming, preview)
+function addon.AddRankedEnemy(guid)
+    if not updateScope() then return false, unavailable end
+    local enemy = addon.RankedEnemy(guid)
+    if not enemy then return false, "Немає підтвердженого запису в рейтингу." end
+    local pendingKey = "pending:" .. guid:upper()
+    local nameKey = enemy.name:find(" ", 1, true) and playerName(enemy.name)
+    if nameKey and isAllyName(nameKey) then return false, invalidEnemy end
+    if entries[pendingKey] or knownGUIDs[guid] or (nameKey and entries[nameKey]) then
+        return false, "Цей ворог уже в Книзі Образ."
+    end
+    local note = "Додано з рейтингу «Вороги»."
+    local unit = UnitTokenFromGUID and UnitTokenFromGUID(guid)
+    local key, name = enemyUnit(unit)
+    if key then return addEnemy(name, note, unit) end
+    local _, author = unitName("player")
+    entries[pendingKey] = { name = enemy.name, note = note, author = author or "", addedAt = GetServerTime(),
+        kind = "P", deaths = 0, guid = guid, pending = true }
+    if nameKey then removalLog()[nameKey] = nil end
+    addon.RefreshUI()
+    return true, "Додано " .. enemy.name .. ". WoW звірить ім’я та фракцію при зустрічі."
+end
+
+function addon.RemovalProposals()
+    local proposals, now = {}, GetServerTime()
+    for key, record in pairs(removalLog()) do
+        if now - record.at > 30 * 86400 or entries[key] then
+            removalLog()[key] = nil
+        else
+            proposals[#proposals + 1] = record
+        end
+    end
+    return proposals
+end
+
+local function mergeEntries(incoming, preview, explicit, planned)
     if not updateScope() then
         return 0, 0
     end
-    local added, updated, changes = 0, 0, {}
+    local added, updated, changes, removed = 0, 0, {}, 0
     for key, record in pairs(incoming) do
-        if eligibleRecord(key, record) then
-            local previous = entries[key]
-            if not previous then
+        local previous = entries[key]
+        local plan = planned and planned[key]
+        local same = not plan or (plan.previous == previous and (not previous or
+            (previous.note == plan.oldNote and (previous.high == true) == plan.oldHigh)))
+        if record.removed and explicit and previous and same then
+            removed = removed + 1
+            if preview then
+                changes[#changes + 1] = { key = key, record = previous, proposal = record, removed = true,
+                    previous = previous, oldNote = previous.note, oldHigh = previous.high == true }
+            else
+                removeEntry(key, previous, false)
+            end
+        elseif not record.removed and eligibleRecord(key, record) then
+            if not previous and same then
                 added = added + 1
                 if preview then
                     changes[#changes + 1] = { key = key, record = record, new = true }
                 else
                     entries[key] = record
+                    removalLog()[key] = nil
                 end
-            else
+            elseif previous then
                 local moreDeaths = record.deaths > previous.deaths
                 local higherPriority = record.high == true and not previous.high
-                if moreDeaths or higherPriority then
+                local changedNote = explicit and same and record.note ~= previous.note
+                local changedPriority = explicit and same and (record.high == true) ~= (previous.high == true)
+                if moreDeaths or (not explicit and higherPriority) or changedNote or changedPriority then
                     updated = updated + 1
                     if preview then
                         changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths,
-                            higherPriority = higherPriority }
+                            higherPriority = higherPriority, changedNote = changedNote, changedPriority = changedPriority,
+                            previous = previous, oldNote = previous.note, oldHigh = previous.high == true }
                     else
                         previous.deaths = math.max(previous.deaths, record.deaths)
-                        if higherPriority then previous.high = true end
+                        if changedNote then previous.note = record.note end
+                        if changedPriority then previous.high = record.high == true and true or nil end
+                        if not explicit and higherPriority then previous.high = true end
                     end
                 end
             end
@@ -500,7 +622,7 @@ local function mergeEntries(incoming, preview)
     if not preview then
         addon.RefreshUI()
     end
-    return added, updated, changes
+    return added, updated, changes, removed
 end
 
 addon.Ordinary = ordinary
@@ -510,6 +632,7 @@ addon.Clean = clean
 addon.LowerName = lowerName
 addon.PlayerName = playerName
 addon.EntryName = entryName
+addon.RecordKey = recordKey
 addon.UnitName = unitName
 addon.EnemyUnit = enemyUnit
 addon.EnemyEntry = enemyEntry
@@ -602,6 +725,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GrudgeBookDB.lists = GrudgeBookDB.lists or {}
         GrudgeBookDB.guildsImported = GrudgeBookDB.guildsImported or {}
         GrudgeBookDB.sound = GrudgeBookDB.sound or {}
+        GrudgeBookDB.removals = GrudgeBookDB.removals or {}
         addon.InitSync()
         addon.InitStats()
         addon.InitMenus()

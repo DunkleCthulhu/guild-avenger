@@ -30,6 +30,14 @@ local function ownScore()
     return guild.own[key], scope, key, name
 end
 
+local function currentWeek()
+    return math.floor((GetServerTime() + 3 * 86400) / (7 * 86400))
+end
+
+local function weeklyKills(score, week)
+    return score.week == week and score.weeklyKills or 0
+end
+
 function addon.InitStats()
     GrudgeBookDB.stats = GrudgeBookDB.stats or { journals = {}, guilds = {} }
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
@@ -45,6 +53,9 @@ function addon.RecordRevenge()
     local score = ownScore()
     if not score then return end
     score.kills = math.min(maxCount, score.kills + 1)
+    local week = currentWeek()
+    score.weeklyKills = math.min(maxCount, weeklyKills(score, week) + 1)
+    score.week = week
     addon.RefreshStats()
 end
 
@@ -156,6 +167,10 @@ local function publish()
     for guid, enemy in pairs(score.enemies) do
         packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
     end
+    local week = currentWeek()
+    if weeklyKills(score, week) > 0 then
+        packets[#packets + 1] = ("W\t%d\t%d"):format(week, score.weeklyKills)
+    end
     local index, progressAt = 1, GetTime()
     local function stop()
         sendTicker:Cancel()
@@ -215,9 +230,13 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
         return
     end
     local kills = tonumber(message:match("^R\t(%d+)$"))
+    local week, weekly = message:match("^W\t(%d+)\t(%d+)$")
+    week, weekly = tonumber(week), tonumber(weekly)
+    local validWeek = week == currentWeek() and weekly and weekly > 0 and weekly <= maxCount
     local guid, amount, enemy = message:match("^E\t([^\t]+)\t(%d+)\t([^\t]+)$")
     guid, amount, enemy = playerGUID(guid), tonumber(amount), addon.Clean(enemy, addon.NameLimit)
-    if not (kills and kills <= maxCount) and not (guid and amount and amount > 0 and amount <= maxCount and enemy and enemy ~= "") then
+    if not (kills and kills <= maxCount) and not validWeek
+        and not (guid and amount and amount > 0 and amount <= maxCount and enemy and enemy ~= "") then
         return
     end
     local guild = guildData()
@@ -225,6 +244,9 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     peer.name = name
     if kills then
         peer.kills = math.max(peer.kills, kills)
+    elseif validWeek then
+        peer.weeklyKills = math.max(weeklyKills(peer, week), weekly)
+        peer.week = week
     else
         local previous = peer.enemies[guid]
         if not previous or amount >= previous.count then peer.enemies[guid] = { name = enemy, count = amount } end
@@ -233,28 +255,53 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     addon.RefreshStats()
 end
 
-function addon.StatsRows(tab)
-    if tab == 1 then return journal() or {} end
+local function eachScore(include)
     local own, _, ownKey, ownName = ownScore()
-    local rows, enemies = {}, {}
-    if not own then return rows end
-    local function include(score, name)
-        if tab == 2 and score.kills > 0 then
-            rows[#rows + 1] = { name = name, count = score.kills }
-        elseif tab == 3 then
-            for guid, enemy in pairs(score.enemies) do
-                local total = enemies[guid] or { name = enemy.name, count = 0 }
-                if not total.name:find(" ", 1, true) and enemy.name:find(" ", 1, true) then total.name = enemy.name end
-                total.count = total.count + enemy.count
-                enemies[guid] = total
-            end
-        end
-    end
+    if not own then return end
     include(own, ownName)
     local guild = guildData()
     for key, peer in pairs(guild.peers) do
         if key ~= ownKey and addon.IsGuildMember(key) then include(peer, peer.name) end
     end
+end
+
+local function addEnemyScore(total, enemy, guid)
+    if not total then return { guid = guid, name = enemy.name, count = enemy.count } end
+    if not total.name:find(" ", 1, true) and enemy.name:find(" ", 1, true) then total.name = enemy.name end
+    total.count = total.count + enemy.count
+    return total
+end
+
+function addon.RankedEnemy(guid)
+    local key = playerGUID(guid)
+    if not key then return end
+    local total
+    eachScore(function(score)
+        local enemy = score.enemies[key]
+        if enemy then total = addEnemyScore(total, enemy, key) end
+    end)
+    return total
+end
+
+function addon.EnemyScore(guid)
+    local enemy = addon.RankedEnemy(guid)
+    return enemy and enemy.count or 0
+end
+
+function addon.StatsRows(tab, weekly)
+    if tab == 1 then return journal() or {} end
+    local rows, enemies = {}, {}
+    local week = currentWeek()
+    eachScore(function(score, name)
+        if tab == 2 then
+            local count = weekly and weeklyKills(score, week) or score.kills
+            if count > 0 then rows[#rows + 1] = { name = name, count = count } end
+        elseif tab == 3 then
+            for guid, enemy in pairs(score.enemies) do
+                enemies[guid] = addEnemyScore(enemies[guid], enemy, guid)
+            end
+        end
+    end)
     for _, enemy in pairs(enemies) do rows[#rows + 1] = enemy end
     table.sort(rows, function(left, right)
         if left.count ~= right.count then return left.count > right.count end

@@ -161,7 +161,7 @@ local function recipient(input)
     return exact
 end
 
-function addon.Share(input, selection)
+function addon.Share(input, selection, includeRemovals)
     if sending then
         return false, "Дочекайтеся завершення поточного передавання."
     end
@@ -180,7 +180,7 @@ function addon.Share(input, selection)
     if not member.online then
         return false, member.name .. " зараз не в мережі."
     end
-    local packets, message = makePackets(selection)
+    local packets, message = makePackets(selection, includeRemovals)
     if not packets then
         return false, message
     end
@@ -188,24 +188,31 @@ function addon.Share(input, selection)
     return true, "Починаю передавання " .. member.name .. "."
 end
 
-makePackets = function(selection)
+makePackets = function(selection, includeRemovals)
     local entries = {}
+    local removals = includeRemovals and not selection and addon.RemovalProposals() or {}
     for _, entry in ipairs(addon.Entries()) do
-        local entryKey = addon.EntryName(entry.name, entry.kind)
+        local entryKey = addon.RecordKey(entry)
         if (not selection or selection[entryKey]) and addon.EligibleRecord(entryKey, entry) then
             entries[#entries + 1] = entry
         end
     end
-    if #entries == 0 then
+    if #entries + #removals == 0 then
         return nil, "Немає записів для передавання."
     end
-    if #entries > maxEntries then
+    if #entries + #removals > maxEntries then
         return nil, "За одне передавання можна надіслати до 1000 записів."
     end
 
     sequence = sequence % 65535 + 1
     local id = ("%x.%x"):format(GetServerTime(), sequence)
     local packets = { ("B\t%s\t%d"):format(id, #entries), ("V\t%s\t%s"):format(id, version) }
+    if #removals > 0 then
+        packets[#packets + 1] = ("D\t%s\t%d"):format(id, #removals)
+        for _, entry in ipairs(removals) do
+            packets[#packets + 1] = ("X\t%s\t%s\t%s"):format(id, entry.kind, entry.name)
+        end
+    end
     for index, entry in ipairs(entries) do
         local faction = entry.kind == "G" and "G" or (entry.faction == "Alliance" and "A" or "H")
         packets[#packets + 1] = ("R\t%s\t%d\t%s\t%d\t%d\t%s"):format(id, index, faction,
@@ -232,14 +239,14 @@ enqueue = function(key, packets, quiet)
     end
 end
 
-function addon.Publish(selection)
+function addon.Publish(selection, includeRemovals)
     if not addon.UpdateScope() or not guildScope() then
         return false, "Публікація доступна учасникам гільдії."
     end
     if C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
         return false, "WoW тимчасово обмежив повідомлення в чаті."
     end
-    local packets, id = makePackets(selection)
+    local packets, id = makePackets(selection, includeRemovals)
     if not packets then
         return false, id
     end
@@ -316,15 +323,21 @@ local function finish(sender, batch)
         entries[part.key] = { name = part.name, kind = part.kind, faction = part.faction, addedAt = part.addedAt,
             deaths = part.deaths, author = part.author, note = part.note, high = part.high }
     end
-    local added, updated, changes = addon.Merge(entries, true)
+    for key, record in pairs(batch.removals) do
+        if entries[key] then return end
+        entries[key] = record
+    end
+    local added, updated, changes, removed = addon.Merge(entries, true, batch.explicit)
+    local planned = {}
+    for _, change in ipairs(changes or {}) do planned[change.key] = change end
     addon.OfferImport(roster[sender].name, added, updated, changes or {}, function(selection)
         if not addon.UpdateScope() or guildScope() ~= batch.scope or not addon.IsGuildMember(sender) then
             addon.Say("Імпорт скасовано: відправник більше не підтверджений у ростері.")
             return
         end
-        local newEntries, updatedEntries = addon.Merge(selection, false)
-        addon.Say(("Імпорт завершено. Додано %d, оновлено %d."):format(newEntries, updatedEntries))
-    end)
+        local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, batch.explicit, planned)
+        addon.Say(("Імпорт завершено. Додано %d, оновлено %d, вилучено %d."):format(newEntries, updatedEntries, removedEntries or 0))
+    end, removed)
 end
 
 function addon.Receive(receivedPrefix, message, channel, senderName)
@@ -346,14 +359,14 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         end
         return
     end
-    local operation, id, data = message:match("^([BRNHV])\t([%da-f]+%.[%da-f]+)\t(.*)$")
+    local operation, id, data = message:match("^([BRNHVDX])\t([%da-f]+%.[%da-f]+)\t(.*)$")
     if not operation or #id > 16 then
         return
     end
     local now = GetTime()
     if operation == "B" then
         local count = data:match("^%d+$") and tonumber(data)
-        if not count or count < 1 or count > maxEntries then
+        if not count or count > maxEntries then
             return
         end
         for key, old in pairs(incoming) do
@@ -361,7 +374,8 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
                 incoming[key] = nil
             end
         end
-        incoming[sender] = { id = id, count = count, ready = 0, records = {}, progressAt = now, scope = guildScope() }
+        incoming[sender] = { id = id, count = count, ready = 0, records = {}, progressAt = now, scope = guildScope(),
+            removals = {}, removalCount = 0 }
         return
     end
     local batch = incoming[sender]
@@ -372,10 +386,29 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         local senderRank = not batch.version and versionRank(data)
         if senderRank then
             batch.version = data
+            batch.explicit = senderRank >= 2004000
             if senderRank > installedRank then
                 addon.Say(("Список надіслано з новішої версії GrudgeBook %s. %s"):format(data, downloadLink))
             end
         end
+        return
+    end
+    if operation == "D" then
+        local count = data:match("^%d+$") and tonumber(data)
+        if batch.explicit and not batch.expectedRemovals and not next(batch.records)
+            and count and count > 0 and batch.count + count <= maxEntries then
+            batch.expectedRemovals, batch.progressAt = count, now
+        end
+        return
+    elseif operation == "X" then
+        if not batch.expectedRemovals or batch.removalCount >= batch.expectedRemovals then return end
+        local kind, name = data:match("^([PG])\t([^\t]+)$")
+        local key, full = addon.EntryName(name, kind)
+        if not key or batch.removals[key] then return end
+        batch.removals[key] = { name = full, kind = kind, removed = true }
+        batch.removalCount = batch.removalCount + 1
+        batch.progressAt = now
+        if batch.ready == batch.count and batch.removalCount == batch.expectedRemovals then finish(sender, batch) end
         return
     end
     local indexText, fields = data:match("^(%d+)\t(.*)$")
@@ -415,7 +448,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     batch.records[index], batch.progressAt = record, now
     if record.key and record.note ~= nil then
         batch.ready = batch.ready + 1
-        if batch.ready == batch.count then
+        if batch.ready == batch.count and batch.removalCount == (batch.expectedRemovals or 0) then
             finish(sender, batch)
         end
     end

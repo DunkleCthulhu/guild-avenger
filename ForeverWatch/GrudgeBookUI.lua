@@ -2,7 +2,7 @@ local _, addon = ...
 local panel, dialog, review, toast, download, minimapButton, soundWindow
 local statsWindow, commentWindow
 local offers = {}
-local rowCount, rowHeight = 7, 51
+local rowCount, mainRowCount, rowHeight = 7, 6, 51
 local highPrioritySound = "Interface\\AddOns\\ForeverWatch\\Sounds\\HighPriority.ogg"
 local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
@@ -108,7 +108,7 @@ local function showComment(text)
     commentWindow:Show()
 end
 
-local function commentPreview(parent, text, width, lines)
+local function commentPreview(parent, text, width, lines, fullText)
     text:SetWidth(width - 17)
     text:SetWordWrap(true)
     text:SetNonSpaceWrap(true)
@@ -117,7 +117,7 @@ local function commentPreview(parent, text, width, lines)
     control:SetPoint("TOPLEFT", text, "TOPLEFT")
     control:SetSize(width, lines * 13)
     label(control, "GameFontHighlightSmall", color.gold, "…"):SetPoint("TOPRIGHT", 0, -1)
-    control:SetScript("OnClick", function() showComment(text:GetText()) end)
+    control:SetScript("OnClick", function() showComment(fullText and fullText() or text:GetText()) end)
     return control
 end
 
@@ -132,6 +132,13 @@ local function metadata(entry)
         return author .. "  /  " .. date("%d.%m.%Y %H:%M", entry.addedAt)
     end
     return author
+end
+
+local function lastSeen(entry)
+    local seen = entry.seen
+    if not seen then return end
+    local zone = seen.zone and seen.zone ~= "" and (" · " .. seen.zone) or ""
+    return "Бачили " .. date("%d.%m %H:%M", seen.at) .. zone
 end
 
 local function selectionSize(selection)
@@ -159,12 +166,12 @@ local function renderRows()
         row.entry = entry
         row:SetShown(entry ~= nil)
         if entry then
-            local key = addon.EntryName(entry.name, entry.kind)
+            local key = addon.RecordKey(entry)
             row.check:SetChecked(panel.selected[key] == true)
             row.name:SetText(entry.kind == "G" and "Гільдія: " .. entry.name or entry.name)
             row.note:SetText(entry.note)
             row.comment:SetShown(entry.note ~= "")
-            row.metadata:SetText(metadata(entry))
+            row.metadata:SetText(lastSeen(entry) or (entry.pending and "Очікує підтвердження WoW" or metadata(entry)))
             row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and "Високий" or "Звичайний")
             row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
@@ -188,9 +195,11 @@ function addon.RefreshUI()
     local allEntries = addon.Entries()
     panel.entries = {}
     local present = {}
+    local query = addon.LowerName(panel.search:GetText():match("^%s*(.-)%s*$"))
     for _, entry in ipairs(allEntries) do
-        present[addon.EntryName(entry.name, entry.kind)] = true
-        if (not panel.filterKind or panel.filterKind == entry.kind) and (not panel.filterHigh or entry.high) then
+        present[addon.RecordKey(entry)] = true
+        local matches = query == "" or addon.LowerName(entry.name):find(query, 1, true) or addon.LowerName(entry.note):find(query, 1, true)
+        if matches and (not panel.filterKind or panel.filterKind == entry.kind) and (not panel.filterHigh or entry.high) then
             panel.entries[#panel.entries + 1] = entry
         end
     end
@@ -201,6 +210,8 @@ function addon.RefreshUI()
     panel.count:SetText(("Записи: %d / %d"):format(#panel.entries, #allEntries))
     panel.selectAll:SetChecked(#allEntries > 0 and selected == #allEntries)
     panel.selectAll:SetEnabled(#allEntries > 0)
+    panel.selectionCount:SetText(selected > 0 and tostring(selected) or "")
+    enabled(panel.deleteSelected, selected > 0)
     local ready = scope ~= nil
     panel.name:SetEnabled(ready and not panel.editing)
     panel.note:SetEnabled(ready)
@@ -215,7 +226,7 @@ function addon.RefreshUI()
     panel.empty:SetText(ready and (#allEntries > 0 and "За цим фільтром записів немає" or "Книга порожня")
         or "Завантаження гільдії…")
     panel.empty:SetShown(#panel.entries == 0)
-    local maximum = math.max(0, #panel.entries - rowCount)
+    local maximum = math.max(0, #panel.entries - mainRowCount)
     panel.scroll:SetMinMaxValues(0, maximum)
     panel.scroll:SetValue(math.min(maximum, panel.scroll:GetValue()))
     panel.scroll:SetShown(maximum > 0)
@@ -244,8 +255,8 @@ local function finishForm(ok, message, name, kind)
         addon.RefreshUI()
         local key = addon.EntryName(name, kind)
         for index, entry in ipairs(panel.entries) do
-            if addon.EntryName(entry.name, entry.kind) == key then
-                panel.scroll:SetValue(math.max(0, index - rowCount))
+            if addon.RecordKey(entry) == key then
+                panel.scroll:SetValue(math.max(0, index - mainRowCount))
                 break
             end
         end
@@ -258,7 +269,7 @@ local function submit()
     local name, kind, ok, message
     if panel.editing then
         name, kind = panel.editing.name, panel.editing.kind
-        ok, message = addon.EditNote(name, note, kind)
+        ok, message = addon.EditNote(name, note, kind, panel.editing)
     else
         name = manualName()
         if name then
@@ -279,7 +290,7 @@ local function submit()
     finishForm(ok, message, name, kind)
 end
 
-local submitGuild
+local submitGuild, confirmBulkRemoval
 
 local function checkbox(parent, x, y, title)
     local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
@@ -385,12 +396,25 @@ local function createFilters(root)
         root.scroll:SetValue(0)
         addon.RefreshUI()
     end)
-    root.selectAll = checkbox(root, 27, -199, "Позначити всі")
+    local toolbar = CreateFrame("Frame", nil, root)
+    toolbar:SetPoint("TOPLEFT", 20, -200)
+    toolbar:SetPoint("TOPRIGHT", -20, -200)
+    toolbar:SetHeight(30)
+    fill(toolbar, color.border, 0, -2)
+    fill(toolbar, color.panel, 1, -1)
+    root.selectAll = checkbox(toolbar, 7, -3, "Позначити всі")
+    root.selectionCount = label(toolbar, "GameFontHighlightSmall", color.gold)
+    root.selectionCount:SetPoint("LEFT", 112, 0)
+    root.deleteSelected = button(toolbar, "Вилучити позначені", 147, function() confirmBulkRemoval() end)
+    root.deleteSelected:SetPoint("LEFT", 141, 0)
+    root.deleteSelected:SetHeight(23)
+    label(toolbar, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("LEFT", 315, 0)
+    label(toolbar, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("LEFT", 395, 0)
     root.selectAll:SetScript("OnClick", function(self)
         root.selected = {}
         if self:GetChecked() then
             for _, entry in ipairs(addon.Entries()) do
-                root.selected[addon.EntryName(entry.name, entry.kind)] = true
+                root.selected[addon.RecordKey(entry)] = true
             end
         end
         addon.RefreshUI()
@@ -398,7 +422,7 @@ local function createFilters(root)
 end
 
 local function createPanel()
-    local root = window("GrudgeBookPanel", 662, 668, "DIALOG")
+    local root = window("GrudgeBookPanel", 662, 622, "DIALOG")
     root:SetMovable(true)
     root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GrudgeBookPanel")
@@ -418,6 +442,16 @@ local function createPanel()
     label(header, "GameFontNormalLarge", color.gold, "GrudgeBook"):SetPoint("LEFT", 29, 0)
     root.count = label(header, "GameFontHighlightSmall", color.muted)
     root.count:SetPoint("RIGHT")
+    root.search = input(root, 210, addon.NoteLimit)
+    root.search:SetPoint("LEFT", header, "LEFT", 201, 0)
+    local hint = label(root.search, "GameFontHighlightSmall", color.muted, "Пошук за ім’ям або коментарем")
+    hint:SetPoint("LEFT", 8, 0)
+    root.search:SetScript("OnTextChanged", function(self)
+        hint:SetShown(self:GetText() == "")
+        root.scroll:SetValue(0)
+        addon.RefreshUI()
+    end)
+    root.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
@@ -450,17 +484,18 @@ local function createPanel()
     createFilters(root)
 
     local list = CreateFrame("Frame", nil, root)
-    list:SetPoint("TOPLEFT", 20, -223)
-    list:SetPoint("TOPRIGHT", -20, -223)
-    list:SetHeight(rowCount * rowHeight + 4)
+    list:SetPoint("TOPLEFT", 20, -234)
+    list:SetPoint("TOPRIGHT", -20, -234)
+    list:SetHeight(mainRowCount * rowHeight + 4)
     list:EnableMouseWheel(true)
     list:SetScript("OnMouseWheel", function(_, delta)
         root.scroll:SetValue(root.scroll:GetValue() - delta)
     end)
-    fill(list, color.inset, 0, 0)
+    fill(list, color.border, 0, -2)
+    fill(list, color.inset, 1, -1)
     root.empty = label(list, "GameFontHighlight", color.muted)
     root.empty:SetPoint("CENTER")
-    for index = 1, rowCount do
+    for index = 1, mainRowCount do
         local row = CreateFrame("Frame", nil, list)
         row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * rowHeight)
         row:SetPoint("TOPRIGHT", -16, -2 - (index - 1) * rowHeight)
@@ -470,7 +505,7 @@ local function createPanel()
         row.check:SetSize(24, 24)
         row.check:SetPoint("LEFT", 5, 0)
         row.check:SetScript("OnClick", function(self)
-            local key = addon.EntryName(row.entry.name, row.entry.kind)
+            local key = addon.RecordKey(row.entry)
             root.selected[key] = self:GetChecked() and true or nil
             addon.RefreshUI()
         end)
@@ -488,6 +523,18 @@ local function createPanel()
         row.metadata:SetWidth(286)
         row.metadata:SetJustifyH("LEFT")
         row.metadata:SetWordWrap(false)
+        local detail = CreateFrame("Frame", nil, row)
+        detail:SetPoint("TOPLEFT", row.metadata, "TOPLEFT")
+        detail:SetSize(286, 13)
+        detail:EnableMouse(true)
+        detail:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+            GameTooltip:SetText(metadata(row.entry))
+            local seen = lastSeen(row.entry)
+            if seen then GameTooltip:AddLine(seen, 1, 1, 1, true) end
+            GameTooltip:Show()
+        end)
+        detail:SetScript("OnLeave", function() GameTooltip:Hide() end)
         row.deaths = label(row, "GameFontNormalLarge", color.gold)
         row.deaths:SetPoint("RIGHT", -183, 0)
         row.priority = button(row, "", 85, function()
@@ -499,7 +546,7 @@ local function createPanel()
             if panel.editing == entry then
                 resetForm()
             end
-            status(root.status, addon.Delete(entry.name, entry.kind))
+            status(root.status, addon.Delete(entry.name, entry.kind, entry))
         end)
         remove:SetPoint("RIGHT", -7, 0)
         button(row, "Коментар", 78, function()
@@ -512,8 +559,6 @@ local function createPanel()
         end):SetPoint("RIGHT", remove, "LEFT", -6, 0)
         root.rows[index] = row
     end
-    label(root, "GameFontHighlightSmall", color.muted, "Пріоритет"):SetPoint("TOPLEFT", 338, -207)
-    label(root, "GameFontHighlightSmall", color.muted, "Смерті"):SetPoint("TOPLEFT", 405, -207)
     root.scroll = CreateFrame("Slider", nil, list)
     root.scroll:SetPoint("TOPRIGHT", -3, -3)
     root.scroll:SetPoint("BOTTOMRIGHT", -3, 3)
@@ -530,7 +575,7 @@ local function createPanel()
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderRows)
     root.soundSettings = button(root, "Звуки…", 96, addon.PromptSounds)
-    root.soundSettings:SetPoint("TOPLEFT", 20, -594)
+    root.soundSettings:SetPoint("TOPLEFT", 20, -554)
     button(root, "Статистика", 110, function() addon.OpenStats() end):SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
     root.share = button(root, "Поділитися переліком", 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
@@ -548,6 +593,7 @@ local function createPanel()
     root:SetScript("OnHide", function()
         root.name:ClearFocus()
         root.note:ClearFocus()
+        root.search:ClearFocus()
     end)
     root:RegisterEvent("PLAYER_TARGET_CHANGED")
     root:SetScript("OnEvent", function(self)
@@ -577,12 +623,14 @@ function addon.RefreshStats()
     if not statsWindow or not statsWindow:IsShown() then return end
     local root = statsWindow
     local tab = root.selectedTab
-    local rows = addon.StatsRows(tab)
+    local rows = addon.StatsRows(tab, root.weekly)
     local pages = math.max(1, math.ceil(#rows / statsPageSize))
     root.page = math.max(1, math.min(root.page, pages))
     for index, row in ipairs(root.rows) do
         local position = (root.page - 1) * statsPageSize + index
         local record = rows[position]
+        row.record = record
+        row.add:SetShown(record ~= nil and tab == 3)
         row:SetShown(record ~= nil)
         if record and tab == 1 then
             row.name:SetText(record.killer or "Невідомий нападник")
@@ -598,6 +646,8 @@ function addon.RefreshStats()
         end
     end
     root.empty:SetShown(#rows == 0)
+    root.week:SetShown(tab == 2)
+    root.week.label:SetText(root.weekly and "Цього тижня" or "За весь час")
     root.pagination:SetText(("%d / %d"):format(root.page, pages))
     enabled(root.back, root.page > 1)
     enabled(root.next, root.page < pages)
@@ -657,8 +707,21 @@ local function createStats()
         row.detail:SetMaxLines(1)
         row.count = label(row, "GameFontHighlight", color.gold)
         row.count:SetPoint("TOPRIGHT", -10, -6)
+        row.add = button(row, "До книги", 83, function()
+            local ok, message = addon.AddRankedEnemy(row.record.guid)
+            status(root.status, ok, message)
+        end)
+        row.add:SetPoint("RIGHT", -61, -3)
+        row.add:SetHeight(22)
+        row.add:Hide()
         root.rows[index] = row
     end
+    root.week = button(root, "За весь час", 120, function()
+        root.weekly = not root.weekly
+        root.page = 1
+        addon.RefreshStats()
+    end)
+    root.week:SetPoint("TOPRIGHT", -20, -53)
     root.back = button(root, "Назад", 73, function() root.page = root.page - 1; addon.RefreshStats() end)
     root.back:SetPoint("TOPLEFT", 20, -407)
     root.pagination = label(root, "GameFontHighlightSmall", color.muted)
@@ -840,6 +903,7 @@ local function createDialog()
         end
     end)
     root.publish:SetPoint("BOTTOMLEFT", 18, 13)
+    root.removals = checkbox(root, 18, -309, "Запропонувати вилучені записи")
     root:SetScript("OnHide", function()
         root.action = nil
         root.publishAction = nil
@@ -861,10 +925,12 @@ local function openDialog(options)
     dialog.confirm.label:SetText(options.confirm)
     dialog.cancel.label:SetText(options.cancel or "Скасувати")
     dialog.autocomplete = options.autocomplete
-    dialog:SetHeight(options.autocomplete and 339 or 190)
+    dialog:SetHeight(options.autocomplete and (options.removals and 365 or 339) or 190)
     dialog.status:ClearAllPoints()
     dialog.status:SetPoint("TOPLEFT", 18, options.autocomplete and -278 or -118)
     dialog.publish:SetShown(options.autocomplete == true)
+    dialog.removals:SetShown(options.removals == true)
+    dialog.removals:SetChecked(false)
     for _, choice in ipairs(dialog.suggestions) do
         choice:Hide()
     end
@@ -880,6 +946,25 @@ local function openDialog(options)
         dialog.field:SetFocus()
     end
     return true
+end
+
+confirmBulkRemoval = function()
+    local selection, scope = {}, addon.Scope()
+    for _, entry in ipairs(addon.Entries()) do
+        local key = addon.RecordKey(entry)
+        if panel.selected[key] then selection[key] = entry end
+    end
+    local count = selectionSize(selection)
+    if count == 0 then return end
+    openDialog({
+        title = "Вилучити позначені записи?",
+        text = ("З Книги Образ буде вилучено записів: %d."):format(count),
+        confirm = "Вилучити",
+        action = function()
+            local removed = addon.DeleteSelection(selection, scope)
+            return removed > 0, removed > 0 and ("Вилучено записів: %d."):format(removed) or "Вибір або гільдія змінилися."
+        end,
+    })
 end
 
 submitGuild = function()
@@ -916,8 +1001,9 @@ function addon.PromptShare()
         if not addon.UpdateScope() or addon.Scope() ~= scope then
             return false, "Гільдія змінилася. Відкрийте передавання ще раз."
         end
-        if input then return action(input, selection) end
-        return action(selection)
+        local removals = dialog.removals:IsShown() and dialog.removals:GetChecked()
+        if input then return action(input, selection, removals) end
+        return action(selection, removals)
     end
     addon.RefreshRoster()
     openDialog({
@@ -925,6 +1011,7 @@ function addon.PromptShare()
         text = (selection and ("Вибрано записів: %d"):format(selectionSize(selection)) or "Увесь список")
             .. "\nІм’я та прізвище гільдійця",
         value = target, limit = addon.NameLimit, confirm = "Надіслати", autocomplete = true,
+        removals = not selection and scope ~= nil and scope ~= "local" and #addon.RemovalProposals() > 0,
         action = function(input) return send(addon.Share, input) end,
         publishAction = function() return send(addon.Publish) end,
     })
@@ -962,11 +1049,16 @@ local function renderReview()
         if change then
             local record = change.record
             row.check:SetChecked(offer.selected[change.key] == true)
-            row.name:SetText(record.kind == "G" and "Гільдія: " .. record.name or record.name)
-            row.priority:SetText(change.higherPriority and "↑ Високий" or (record.high and "Високий" or "Звичайний"))
-            row.priority:SetTextColor(unpack(record.high and color.gold or color.muted))
-            row.detail:SetText(record.note ~= "" and record.note or "Без коментаря")
-            row.comment:SetShown(record.note ~= "")
+            local title = record.kind == "G" and "Гільдія: " .. record.name or record.name
+            row.name:SetText((change.new and "+ " or change.removed and "− " or "") .. title)
+            local priority = record.high and "Високий" or "Звичайний"
+            row.priority:SetText(change.removed and "Вилучити" or
+                (change.changedPriority and (record.high and "↑ " or "↓ ") .. priority) or
+                (change.higherPriority and "↑ Високий") or priority)
+            row.priority:SetTextColor(unpack(change.removed and color.red or record.high and color.gold or color.muted))
+            local note = record.note ~= "" and record.note or "Без коментаря"
+            row.detail:SetText(change.changedNote and "Нова причина · " .. note or note)
+            row.comment:SetShown(record.note ~= "" or change.changedNote == true)
             row.author:SetText((record.author ~= "" and record.author or "Автор невідомий")
                 .. (record.deaths > 0 and (" · Смерті: %d"):format(record.deaths) or ""))
         end
@@ -976,10 +1068,11 @@ local function renderReview()
     enabled(review.confirm, selected > 0)
 end
 
-local function selectAll(value)
+local function selectAll(value, additionsAndCountsOnly)
     local offer = review.offer
     for _, change in ipairs(offer.changes) do
-        offer.selected[change.key] = value and true or nil
+        local modifiesRecord = change.removed or change.changedNote or change.changedPriority
+        offer.selected[change.key] = value and (not additionsAndCountsOnly or not modifiesRecord) and true or nil
     end
     renderReview()
 end
@@ -1028,7 +1121,15 @@ local function createReview()
         row.detail = label(row, "GameFontHighlightSmall", color.muted)
         row.detail:SetPoint("TOPLEFT", 36, -22)
         row.detail:SetJustifyH("LEFT")
-        row.comment = commentPreview(row, row.detail, 405, 1)
+        row.comment = commentPreview(row, row.detail, 405, 1, function()
+            local change = row.change
+            if change.changedNote then
+                local before = change.oldNote ~= "" and change.oldNote or "Без коментаря"
+                local after = change.record.note ~= "" and change.record.note or "Без коментаря"
+                return "Було\n" .. before .. "\n\nПропонують\n" .. after
+            end
+            return change.record.note
+        end)
         row.author = label(row, "GameFontHighlightSmall", color.muted)
         row.author:SetPoint("TOPLEFT", 36, -36)
         row.author:SetWidth(405)
@@ -1059,7 +1160,7 @@ local function createReview()
         local selected = {}
         for _, change in ipairs(offer.changes) do
             if offer.selected[change.key] then
-                selected[change.key] = change.record
+                selected[change.key] = change.proposal or change.record
             end
         end
         root:Hide()
@@ -1085,19 +1186,19 @@ presentOffer = function()
     offer.selected = {}
     review.offer = offer
     review.sender:SetText("Відправник: " .. offer.sender)
-    review.summary:SetText(("Нових записів: %d. Оновлень: %d."):format(offer.added, offer.updated))
+    review.summary:SetText(("Нові: %d · Оновлення: %d · На вилучення: %d"):format(offer.added, offer.updated, offer.removed or 0))
     review.empty:SetShown(#offer.changes == 0)
     local maximum = math.max(0, #offer.changes - rowCount)
     review.scroll:SetMinMaxValues(0, maximum)
     review.scroll:SetValue(0)
     review.scroll:SetShown(maximum > 0)
-    selectAll(true)
+    selectAll(true, true)
     review:Show()
 end
 
-function addon.OfferImport(sender, added, updated, changes, accept)
+function addon.OfferImport(sender, added, updated, changes, accept, removed)
     if #offers < 10 then
-        offers[#offers + 1] = { sender = sender, added = added, updated = updated, changes = changes, accept = accept }
+        offers[#offers + 1] = { sender = sender, added = added, updated = updated, changes = changes, accept = accept, removed = removed }
         presentOffer()
     end
 end
