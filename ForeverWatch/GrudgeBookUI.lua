@@ -1,5 +1,6 @@
 local _, addon = ...
 local panel, dialog, review, toast, download, minimapButton, soundWindow
+local statsWindow, commentWindow
 local offers = {}
 local rowCount, rowHeight = 7, 51
 local highPrioritySound = "Interface\\AddOns\\ForeverWatch\\Sounds\\HighPriority.ogg"
@@ -88,6 +89,38 @@ local function window(name, width, height, strata)
     return root
 end
 
+local function showComment(text)
+    if not commentWindow then
+        local root = window("GrudgeBookComment", 500, 174, "FULLSCREEN_DIALOG")
+        root:SetFrameLevel(32)
+        tinsert(UISpecialFrames, "GrudgeBookComment")
+        label(root, "GameFontNormalLarge", color.gold, "Коментар"):SetPoint("TOPLEFT", 20, -16)
+        root.text = label(root, "GameFontHighlight", color.white)
+        root.text:SetPoint("TOPLEFT", 20, -47)
+        root.text:SetWidth(460)
+        root.text:SetJustifyH("LEFT")
+        root.text:SetWordWrap(true)
+        root.text:SetNonSpaceWrap(true)
+        button(root, "Закрити", 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 13)
+        commentWindow = root
+    end
+    commentWindow.text:SetText(text)
+    commentWindow:Show()
+end
+
+local function commentPreview(parent, text, width, lines)
+    text:SetWidth(width - 17)
+    text:SetWordWrap(true)
+    text:SetNonSpaceWrap(true)
+    text:SetMaxLines(lines)
+    local control = CreateFrame("Button", nil, parent)
+    control:SetPoint("TOPLEFT", text, "TOPLEFT")
+    control:SetSize(width, lines * 13)
+    label(control, "GameFontHighlightSmall", color.gold, "…"):SetPoint("TOPRIGHT", 0, -1)
+    control:SetScript("OnClick", function() showComment(text:GetText()) end)
+    return control
+end
+
 local function status(text, success, message)
     text:SetTextColor(unpack(success and color.muted or color.red))
     text:SetText(message or "")
@@ -130,6 +163,7 @@ local function renderRows()
             row.check:SetChecked(panel.selected[key] == true)
             row.name:SetText(entry.kind == "G" and "Гільдія: " .. entry.name or entry.name)
             row.note:SetText(entry.note)
+            row.comment:SetShown(entry.note ~= "")
             row.metadata:SetText(metadata(entry))
             row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and "Високий" or "Звичайний")
@@ -447,9 +481,8 @@ local function createPanel()
         row.name:SetWordWrap(false)
         row.note = label(row, "GameFontHighlightSmall", color.muted)
         row.note:SetPoint("TOPLEFT", 34, -20)
-        row.note:SetWidth(286)
         row.note:SetJustifyH("LEFT")
-        row.note:SetWordWrap(false)
+        row.comment = commentPreview(row, row.note, 286, 1)
         row.metadata = label(row, "GameFontHighlightSmall", color.muted)
         row.metadata:SetPoint("TOPLEFT", 34, -34)
         row.metadata:SetWidth(286)
@@ -498,6 +531,7 @@ local function createPanel()
     root.scroll:SetScript("OnValueChanged", renderRows)
     root.soundSettings = button(root, "Звуки…", 96, addon.PromptSounds)
     root.soundSettings:SetPoint("TOPLEFT", 20, -594)
+    button(root, "Статистика", 110, function() addon.OpenStats() end):SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
     root.share = button(root, "Поділитися переліком", 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
     root.clearSelection = button(root, "Зняти вибір", 105, function()
@@ -535,6 +569,119 @@ function addon.ToggleUI()
     if not panel.editing and not manualName() then
         putTarget()
     end
+end
+
+local statsPageSize = 7
+
+function addon.RefreshStats()
+    if not statsWindow or not statsWindow:IsShown() then return end
+    local root = statsWindow
+    local tab = root.selectedTab
+    local rows = addon.StatsRows(tab)
+    local pages = math.max(1, math.ceil(#rows / statsPageSize))
+    root.page = math.max(1, math.min(root.page, pages))
+    for index, row in ipairs(root.rows) do
+        local position = (root.page - 1) * statsPageSize + index
+        local record = rows[position]
+        row:SetShown(record ~= nil)
+        if record and tab == 1 then
+            row.name:SetText(record.killer or "Невідомий нападник")
+            row.count:SetText(date("%d.%m %H:%M", record.at))
+            local place = record.zone and record.zone ~= "" and record.zone or "Невідома локація"
+            if record.area and record.area ~= "" and record.area ~= place then place = place .. " · " .. record.area end
+            if record.x then place = place .. ("  %.1f, %.1f"):format(record.x * 100, record.y * 100) end
+            row.detail:SetText(place)
+        elseif record then
+            row.name:SetText(("%d.  %s"):format(position, record.name))
+            row.count:SetText(tostring(record.count))
+            row.detail:SetText(tab == 2 and "Останні удари по цілях Книги Образ" or "Останні удари по гільдійцях")
+        end
+    end
+    root.empty:SetShown(#rows == 0)
+    root.pagination:SetText(("%d / %d"):format(root.page, pages))
+    enabled(root.back, root.page > 1)
+    enabled(root.next, root.page < pages)
+    root.share:SetChecked(addon.StatsSharing())
+    local scope = addon.Scope()
+    local inGuild = IsInGuild() and scope ~= nil and scope ~= "local"
+    enabled(root.request, inGuild)
+    root.share:SetEnabled(inGuild)
+end
+
+local function createStats()
+    local root = window("GrudgeBookStats", 540, 532, "FULLSCREEN_DIALOG")
+    root.page, root.rows, root.Tabs = 1, {}, {}
+    root.minTabWidth = 100
+    tinsert(UISpecialFrames, "GrudgeBookStats")
+    label(root, "GameFontNormalLarge", color.gold, "Статистика GrudgeBook"):SetPoint("TOPLEFT", 20, -18)
+    local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -5, -5)
+    close:SetScript("OnClick", function() root:Hide() end)
+    local titles = { "Мої смерті", "Месники", "Вороги" }
+    for index, title in ipairs(titles) do
+        local tab = CreateFrame("Button", nil, root, "PanelTopTabButtonTemplate")
+        root.Tabs[index] = tab
+        tab:SetID(index)
+        tab:SetText(title)
+        tab:SetScript("OnClick", function(self)
+            PanelTemplates_SetTab(root, self:GetID())
+            root.page = 1
+            addon.RefreshStats()
+        end)
+    end
+    root.Tabs[1]:SetPoint("TOPLEFT", 20, -50)
+    PanelTemplates_SetNumTabs(root, #titles)
+    PanelTemplates_SetTab(root, 1)
+    local list = CreateFrame("Frame", nil, root)
+    list:SetPoint("TOPLEFT", 20, -87)
+    list:SetPoint("TOPRIGHT", -20, -87)
+    list:SetHeight(statsPageSize * 44 + 4)
+    fill(list, color.inset, 0, 0)
+    root.empty = label(list, "GameFontHighlight", color.muted, "Поки немає записів")
+    root.empty:SetPoint("CENTER")
+    for index = 1, statsPageSize do
+        local row = CreateFrame("Frame", nil, list)
+        row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * 44)
+        row:SetPoint("TOPRIGHT", -2, -2 - (index - 1) * 44)
+        row:SetHeight(42)
+        fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+        row.name = label(row, "GameFontHighlight", color.white)
+        row.name:SetPoint("TOPLEFT", 10, -5)
+        row.name:SetWidth(326)
+        row.name:SetJustifyH("LEFT")
+        row.name:SetMaxLines(1)
+        row.detail = label(row, "GameFontHighlightSmall", color.muted)
+        row.detail:SetPoint("TOPLEFT", 10, -23)
+        row.detail:SetWidth(476)
+        row.detail:SetJustifyH("LEFT")
+        row.detail:SetMaxLines(1)
+        row.count = label(row, "GameFontHighlight", color.gold)
+        row.count:SetPoint("TOPRIGHT", -10, -6)
+        root.rows[index] = row
+    end
+    root.back = button(root, "Назад", 73, function() root.page = root.page - 1; addon.RefreshStats() end)
+    root.back:SetPoint("TOPLEFT", 20, -407)
+    root.pagination = label(root, "GameFontHighlightSmall", color.muted)
+    root.pagination:SetPoint("LEFT", root.back, "RIGHT", 8, 0)
+    root.next = button(root, "Далі", 73, function() root.page = root.page + 1; addon.RefreshStats() end)
+    root.next:SetPoint("TOPLEFT", 149, -407)
+    root.share = checkbox(root, 20, -445, "Ділитися підсумками з гільдією")
+    root.share:SetScript("OnClick", function(self) addon.SetStatsSharing(self:GetChecked()) end)
+    root.request = button(root, "Оновити рейтинг", 128, function() root.status:SetText(addon.RequestStats()) end)
+    root.request:SetPoint("TOPRIGHT", -20, -442)
+    root.status = label(root, "GameFontHighlightSmall", color.muted, "Гільдія бачить тільки підсумки. Журнал і координати локальні.")
+    root.status:SetPoint("BOTTOMLEFT", 20, 23)
+    root.status:SetWidth(500)
+    root.status:SetJustifyH("LEFT")
+    root.status:SetMaxLines(2)
+    return root
+end
+
+function addon.OpenStats()
+    if not statsWindow then statsWindow = createStats() end
+    statsWindow:Show()
+    addon.RefreshRoster()
+    addon.RefreshStats()
 end
 
 function addon.InitMinimap()
@@ -819,6 +966,7 @@ local function renderReview()
             row.priority:SetText(change.higherPriority and "↑ Високий" or (record.high and "Високий" or "Звичайний"))
             row.priority:SetTextColor(unpack(record.high and color.gold or color.muted))
             row.detail:SetText(record.note ~= "" and record.note or "Без коментаря")
+            row.comment:SetShown(record.note ~= "")
             row.author:SetText((record.author ~= "" and record.author or "Автор невідомий")
                 .. (record.deaths > 0 and (" · Смерті: %d"):format(record.deaths) or ""))
         end
@@ -879,9 +1027,8 @@ local function createReview()
         row.priority:SetPoint("TOPRIGHT", -9, -7)
         row.detail = label(row, "GameFontHighlightSmall", color.muted)
         row.detail:SetPoint("TOPLEFT", 36, -22)
-        row.detail:SetWidth(405)
         row.detail:SetJustifyH("LEFT")
-        row.detail:SetWordWrap(false)
+        row.comment = commentPreview(row, row.detail, 405, 1)
         row.author = label(row, "GameFontHighlightSmall", color.muted)
         row.author:SetPoint("TOPLEFT", 36, -36)
         row.author:SetWidth(405)
@@ -1128,9 +1275,8 @@ local function createAlert()
     root.name:SetWordWrap(false)
     root.note = label(root, "GameFontHighlight", color.white)
     root.note:SetPoint("TOPLEFT", 67, -34)
-    root.note:SetWidth(236)
     root.note:SetJustifyH("LEFT")
-    root.note:SetMaxLines(2)
+    root.comment = commentPreview(root, root.note, 236, 2)
     local divider = root:CreateTexture(nil, "ARTWORK")
     divider:SetPoint("TOPLEFT", 67, -59)
     divider:SetPoint("TOPRIGHT", -15, -59)
@@ -1174,6 +1320,7 @@ function addon.ShowAlert(entry, preview)
     toast.name:SetText(entry.name)
     toast:SetBackdropBorderColor(unpack(entry.high and urgentBorder or alertBorder))
     toast.note:SetText(entry.note)
+    toast.comment:SetShown(entry.note ~= "")
     toast.priority:SetShown(entry.high == true)
     toast:Show()
     refreshAlertButtons()

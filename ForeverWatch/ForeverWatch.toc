@@ -1,9 +1,10 @@
 ## Interface: 16001
 ## Title: GrudgeBook
 ## Notes: Enemy watchlist, encounter alerts, and consent-based guild sharing for WoW: Forever.
-## Version: 2.2.1
+## Version: 2.3.0
 ## SavedVariables: GrudgeBookDB, ForeverWatchDB
 
 GrudgeBook.lua
 GrudgeBookSync.lua
+GrudgeBookStats.lua
 GrudgeBookUI.lua

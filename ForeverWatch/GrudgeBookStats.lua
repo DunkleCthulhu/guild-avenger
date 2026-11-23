@@ -1,0 +1,264 @@
+local _, addon = ...
+local prefix = "GrudgeStats1"
+local maxCount = 2147483647
+local journalLimit = 100
+local heldDeath, latestDeath, sendTicker, lastRequest, lastReply
+
+local function isNumber(value)
+    return addon.Ordinary(value) and type(value) == "number"
+end
+
+local function playerGUID(guid)
+    if not addon.IsText(guid) or #guid > 40 then return end
+    local realm, id = guid:match("^Player%-(%d+)%-(%x+)$")
+    if realm then return ("Player-%s-%s"):format(realm, id:upper()) end
+end
+
+local function guildData()
+    local scope = addon.Scope()
+    if not scope or scope == "local" or not IsInGuild() then return end
+    local guilds = GrudgeBookDB.stats.guilds
+    if not guilds[scope] then guilds[scope] = { own = {}, peers = {} } end
+    return guilds[scope], scope
+end
+
+local function ownScore()
+    local guild, scope = guildData()
+    local key, name = addon.UnitName("player")
+    if not guild or not key then return end
+    if not guild.own[key] then guild.own[key] = { kills = 0, enemies = {} } end
+    return guild.own[key], scope, key, name
+end
+
+function addon.InitStats()
+    GrudgeBookDB.stats = GrudgeBookDB.stats or { journals = {}, guilds = {} }
+    C_ChatInfo.RegisterAddonMessagePrefix(prefix)
+end
+
+function addon.IsOwnKillingBlow(guid)
+    if not addon.IsText(guid) then return false end
+    local character, pet = UnitGUID("player"), UnitGUID("pet")
+    return (addon.IsText(character) and guid == character) or (addon.IsText(pet) and guid == pet)
+end
+
+function addon.RecordRevenge()
+    local score = ownScore()
+    if not score then return end
+    score.kills = math.min(maxCount, score.kills + 1)
+    addon.RefreshStats()
+end
+
+local function journal()
+    local guid = playerGUID(UnitGUID("player"))
+    if not guid then return end
+    local journals = GrudgeBookDB.stats.journals
+    if not journals[guid] then journals[guid] = {} end
+    return journals[guid]
+end
+
+local function location(entry)
+    entry.zone = addon.Clean(GetRealZoneText(), 140)
+    entry.area = addon.Clean(GetSubZoneText(), 140)
+    if not C_Map or not C_Map.GetBestMapForUnit or not C_Map.GetPlayerMapPosition then return end
+    local mapID = C_Map.GetBestMapForUnit("player")
+    if not isNumber(mapID) then return end
+    local position = C_Map.GetPlayerMapPosition(mapID, "player")
+    if not addon.Ordinary(position) or not position then return end
+    local x, y = position:GetXY()
+    if isNumber(x) and isNumber(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (x > 0 or y > 0) then
+        entry.x, entry.y = x, y
+    end
+end
+
+local function lethalHit(when)
+    if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return end
+    local ok, hits = pcall(C_DeathRecap.GetRecapEvents)
+    if not ok or not addon.Ordinary(hits) or type(hits) ~= "table" then return end
+    local latest, time
+    for _, hit in ipairs(hits) do
+        if addon.Ordinary(hit) and type(hit) == "table" and isNumber(hit.overkill) and hit.overkill >= 0
+            and isNumber(hit.timestamp) and math.abs(hit.timestamp - when) <= 5
+            and (not time or hit.timestamp > time) then
+            latest, time = hit, hit.timestamp
+        end
+    end
+    return latest
+end
+
+local function identifyKiller(entry, hit, score)
+    local guid = playerGUID(hit.sourceGUID)
+    local name = addon.Clean(hit.sourceName, addon.NameLimit)
+    local flags = hit.sourceFlags
+    local hostile = guid and isNumber(flags) and bit.band(flags, 0x40) ~= 0
+    if guid and UnitTokenFromGUID then
+        local unit = UnitTokenFromGUID(hit.sourceGUID)
+        if addon.IsText(unit) then
+            local key, full = addon.UnitName(unit)
+            name = full or name
+            local faction, own = UnitFactionGroup(unit), UnitFactionGroup("player")
+            if unit == "player" or (key and addon.IsGuildMember(key))
+                or (addon.IsText(faction) and addon.IsText(own) and faction == own) then
+                hostile = false
+            end
+        end
+    end
+    if not name or name == "" then return false end
+    entry.killer = name
+    if score and hostile then
+        local previous = score.enemies[guid]
+        score.enemies[guid] = { name = name, count = math.min(maxCount, (previous and previous.count or 0) + 1) }
+    end
+    return true
+end
+
+function addon.RecordOwnDeath()
+    if heldDeath then return end
+    local deaths = journal()
+    if not deaths then return end
+    local entry = { at = GetServerTime() }
+    heldDeath, latestDeath = entry, entry
+    location(entry)
+    table.insert(deaths, 1, entry)
+    if #deaths > journalLimit then table.remove(deaths) end
+    addon.RefreshStats()
+    local score = ownScore()
+    local delays = { 0.3, 0.6, 1.1 }
+    local function readRecap(attempt)
+        if latestDeath ~= entry then return end
+        local hit = lethalHit(entry.at)
+        if hit and identifyKiller(entry, hit, score) then
+            addon.RefreshStats()
+        elseif attempt < #delays and heldDeath == entry then
+            C_Timer.After(delays[attempt + 1], function() readRecap(attempt + 1) end)
+        end
+    end
+    C_Timer.After(delays[1], function() readRecap(1) end)
+end
+
+function addon.ResetOwnDeath()
+    local dead = UnitIsDeadOrGhost("player")
+    if addon.Ordinary(dead) and dead == false then heldDeath = nil end
+end
+
+function addon.StatsSharing()
+    local score = ownScore()
+    return score and score.share == true or false
+end
+
+local function send(message)
+    return C_ChatInfo.SendAddonMessage(prefix, message, "GUILD")
+end
+
+local function publish()
+    local score, scope, key = ownScore()
+    if sendTicker or not score or not score.share or not addon.IsGuildMember(key) then return end
+    local packets = { ("R\t%d"):format(score.kills) }
+    for guid, enemy in pairs(score.enemies) do
+        packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
+    end
+    local index, progressAt = 1, GetTime()
+    local function stop()
+        sendTicker:Cancel()
+        sendTicker = nil
+    end
+    sendTicker = C_Timer.NewTicker(0.25, function()
+        local current, currentScope, currentKey = ownScore()
+        if currentScope ~= scope or current ~= score or not current.share or not addon.IsGuildMember(currentKey)
+            or GetTime() - progressAt >= 60 then
+            stop()
+            return
+        end
+        local results = Enum.SendAddonMessageResult
+        local result = send(packets[index])
+        if result == results.AddonMessageThrottle or result == results.ChannelThrottle then return end
+        index = index + 1
+        progressAt = GetTime()
+        if result ~= results.Success or index > #packets then stop() end
+    end)
+end
+
+function addon.SetStatsSharing(enabled)
+    local score = ownScore()
+    if not score then return end
+    score.share = enabled and true or nil
+    if enabled then publish() end
+end
+
+function addon.RequestStats()
+    local score, _, key = ownScore()
+    if not score or not addon.IsGuildMember(key) then
+        addon.RefreshRoster()
+        return "Потрібен завантажений ростер гільдії."
+    end
+    local now = GetTime()
+    if lastRequest and now - lastRequest < 20 then return "Зачекайте перед наступним оновленням." end
+    if send("Q") ~= Enum.SendAddonMessageResult.Success then return "WoW не прийняв запит. Спробуйте пізніше." end
+    lastRequest = now
+    publish()
+    return "Запит надіслано. Рейтинг оновиться після відповіді гільдійців."
+end
+
+function addon.ReceiveStats(receivedPrefix, message, channel, sender)
+    if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix
+        or not addon.IsText(channel) or channel ~= "GUILD" or not addon.IsText(message) or #message > 180 then return end
+    local key, name = addon.PlayerName(sender, true)
+    local own, scope, ownKey = ownScore()
+    if not own or not key or key == ownKey or not addon.IsGuildMember(key) then return end
+    if message == "Q" then
+        local now = GetTime()
+        if own.share and (not lastReply or now - lastReply >= 45) then
+            lastReply = now
+            C_Timer.After(math.random(4, 28) / 10, function()
+                if addon.Scope() == scope and ownScore() == own then publish() end
+            end)
+        end
+        return
+    end
+    local kills = tonumber(message:match("^R\t(%d+)$"))
+    local guid, amount, enemy = message:match("^E\t([^\t]+)\t(%d+)\t([^\t]+)$")
+    guid, amount, enemy = playerGUID(guid), tonumber(amount), addon.Clean(enemy, addon.NameLimit)
+    if not (kills and kills <= maxCount) and not (guid and amount and amount > 0 and amount <= maxCount and enemy and enemy ~= "") then
+        return
+    end
+    local guild = guildData()
+    local peer = guild.peers[key] or { kills = 0, enemies = {} }
+    peer.name = name
+    if kills then
+        peer.kills = math.max(peer.kills, kills)
+    else
+        local previous = peer.enemies[guid]
+        if not previous or amount >= previous.count then peer.enemies[guid] = { name = enemy, count = amount } end
+    end
+    guild.peers[key] = peer
+    addon.RefreshStats()
+end
+
+function addon.StatsRows(tab)
+    if tab == 1 then return journal() or {} end
+    local own, _, ownKey, ownName = ownScore()
+    local rows, enemies = {}, {}
+    if not own then return rows end
+    local function include(score, name)
+        if tab == 2 and score.kills > 0 then
+            rows[#rows + 1] = { name = name, count = score.kills }
+        elseif tab == 3 then
+            for guid, enemy in pairs(score.enemies) do
+                local total = enemies[guid] or { name = enemy.name, count = 0 }
+                if not total.name:find(" ", 1, true) and enemy.name:find(" ", 1, true) then total.name = enemy.name end
+                total.count = total.count + enemy.count
+                enemies[guid] = total
+            end
+        end
+    end
+    include(own, ownName)
+    local guild = guildData()
+    for key, peer in pairs(guild.peers) do
+        if key ~= ownKey and addon.IsGuildMember(key) then include(peer, peer.name) end
+    end
+    for _, enemy in pairs(enemies) do rows[#rows + 1] = enemy end
+    table.sort(rows, function(left, right)
+        if left.count ~= right.count then return left.count > right.count end
+        return addon.LowerName(left.name) < addon.LowerName(right.name)
+    end)
+    return rows
+end

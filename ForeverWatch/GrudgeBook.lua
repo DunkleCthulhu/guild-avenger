@@ -292,7 +292,7 @@ local function scanPlates()
     end
 end
 
-local function recordDeath(guid)
+local function recordDeath(guid, killer)
     if not isText(guid) or not entries then
         return
     end
@@ -314,8 +314,14 @@ local function recordDeath(guid)
     local observation = observedGuilds[guid]
     local guild = observation and now - observation.at <= guildObservationLifetime
         and isDifferentFaction(observation.faction) and not isAllyName(observation.player) and entries[observation.guild]
+    if not personal and not guild then return end
     local death = deaths[guid]
     if not death or now - death.at >= deathCooldown then death = { at = now } end
+    if not death.revenge and addon.IsOwnKillingBlow(killer) then
+        death.revenge = true
+        addon.RecordRevenge()
+    end
+    deaths[guid] = death
     if not ((personal and not death.player) or (guild and not death.guild)) then
         return
     end
@@ -327,7 +333,6 @@ local function recordDeath(guid)
         guild.deaths = math.min(guild.deaths + 1, 2147483647)
         death.guild = true
     end
-    deaths[guid] = death
     addon.RefreshUI()
 end
 
@@ -538,6 +543,7 @@ local function showHelp()
     say('/gb guild add ["Назва гільдії"] [Коментар] · /gb guild del [Назва гільдії]')
     say("/gb share [Ім’я Прізвище] — гільдійцю · /gb share guild — у чат гільдії")
     say("/gb test [high] — перевірити сповіщення · /gb download — посилання на GitHub")
+    say("/gb stats — журнал смертей і гільдійні рейтинги")
 end
 
 local function slash(input)
@@ -573,6 +579,8 @@ local function slash(input)
             high = rest:lower() == "high" }, true)
     elseif command == "download" then
         addon.OpenDownload()
+    elseif command == "stats" then
+        addon.OpenStats()
     elseif command == "list" then
         local list = sortedEntries()
         say(#list == 0 and "Книга порожня." or ("Записів у Книзі Образ: %d"):format(#list))
@@ -595,6 +603,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GrudgeBookDB.guildsImported = GrudgeBookDB.guildsImported or {}
         GrudgeBookDB.sound = GrudgeBookDB.sound or {}
         addon.InitSync()
+        addon.InitStats()
         addon.InitMenus()
         SLASH_GRUDGEBOOK1, SLASH_GRUDGEBOOK2 = "/gb", "/fw"
         SlashCmdList.GRUDGEBOOK = slash
@@ -606,6 +615,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
+        addon.RefreshStats()
     elseif event == "PLAYER_LEAVING_WORLD" then
         plates, observedGuilds, deaths = {}, {}, {}
         addon.CloseAlert()
@@ -623,8 +633,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "UNIT_DIED" then
         recordDeath(...)
     elseif event == "PARTY_KILL" then
-        local _, victim = ...
-        recordDeath(victim)
+        local killer, victim = ...
+        recordDeath(victim, killer)
+    elseif event == "PLAYER_DEAD" then
+        addon.RecordOwnDeath()
+    elseif event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
+        addon.ResetOwnDeath()
     elseif event == "UNIT_COMBAT" then
         local unit = ...
         if isText(unit) and (unit == "target" or unit == "mouseover" or unit == "focus" or plates[unit] ~= nil) then
@@ -644,6 +658,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "CHAT_MSG_ADDON" then
         addon.Receive(...)
+        addon.ReceiveStats(...)
     elseif event == "ADDON_LOADED" then
         addon.InitMenus()
     end
@@ -653,7 +668,7 @@ for _, event in ipairs({
     "ADDON_LOADED", "PLAYER_ENTERING_WORLD", "PLAYER_LEAVING_WORLD", "PLAYER_GUILD_UPDATE",
     "INITIAL_CLUBS_LOADED", "GUILD_ROSTER_UPDATE", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_COMBAT", "UNIT_DIED", "PARTY_KILL",
-    "UNIT_HEALTH", "CHAT_MSG_ADDON",
+    "UNIT_HEALTH", "CHAT_MSG_ADDON", "PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST",
 }) do
     frame:RegisterEvent(event)
 end
