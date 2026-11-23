@@ -1,7 +1,7 @@
 local addonName, addon = ...
 local prefix = "GuildAvenger2"
 local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
-local downloadURL = "https://github.com/DunkleCthulhu/forever-watch/releases/latest"
+local downloadURL = "https://github.com/DunkleCthulhu/guild-avenger/releases/latest"
 local projectInfo = "Безкоштовний аддон з відкритим кодом. Для розваги, без монетизації."
 local downloadLink = "|Haddon:GuildAvengerDownload|h[GitHub · завантажити]|h"
 local maxEntries = 1000

@@ -1,10 +1,10 @@
-# Guild Avenger 3.0.0
+# Guild Avenger 3.0.1
 
 Книга Образ для World of Warcraft: Forever 1.60.1. Вона веде список ворожих персонажів і гільдій, попереджає про зустріч та рахує зафіксовані смерті персонажів.
 
 ## Встановлення
 
-Розпакуйте `GuildAvenger-3.0.0.zip` у `World of Warcraft/_forever_/Interface/AddOns/`. У меню аддонів він показується як **Guild Avenger**. Введіть `/gavenger` або натисніть значок книги біля мінікарти. Значок можна перетягнути вздовж її краю. [Релізи GitHub](https://github.com/DunkleCthulhu/forever-watch/releases)
+Розпакуйте `GuildAvenger-3.0.1.zip` у `World of Warcraft/_forever_/Interface/AddOns/`. У меню аддонів він показується як **Guild Avenger**. Введіть `/gavenger` або натисніть значок книги біля мінікарти. Значок можна перетягнути вздовж її краю. [Релізи GitHub](https://github.com/DunkleCthulhu/guild-avenger/releases)
 
 ### Перехід з GrudgeBook або Forever Watch
 
