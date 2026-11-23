@@ -1,73 +1,77 @@
 # Guild Avenger 3.0.1
 
-Книга Образ для World of Warcraft: Forever 1.60.1. Вона веде список ворожих персонажів і гільдій, попереджає про зустріч та рахує зафіксовані смерті персонажів.
+**English** · [Українська](README.uk.md)
 
-## Встановлення
+Guild Avenger is a free, open-source PvP addon for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates. The in-game interface is in Ukrainian.
 
-Розпакуйте `GuildAvenger-3.0.1.zip` у `World of Warcraft/_forever_/Interface/AddOns/`. У меню аддонів він показується як **Guild Avenger**. Введіть `/gavenger` або натисніть значок книги біля мінікарти. Значок можна перетягнути вздовж її краю. [Релізи GitHub](https://github.com/DunkleCthulhu/guild-avenger/releases)
+## Installation
 
-### Перехід з GrudgeBook або Forever Watch
+Extract `GuildAvenger-3.0.1.zip` into `World of Warcraft/_forever_/Interface/AddOns/`. The addon appears in the addon menu as **Guild Avenger**. Type `/gavenger` or click the book icon beside the minimap. Drag the icon to move it around the minimap. [GitHub releases](https://github.com/DunkleCthulhu/guild-avenger/releases)
 
-Закрийте WoW, встановіть Guild Avenger та запустіть скрипт зі сховища на Windows, вказавши свою папку `_forever_`.
+### Migrating from GrudgeBook or Forever Watch
+
+Close WoW, install Guild Avenger, and run the migration script from this repository on Windows. Replace the example path with your `_forever_` folder.
 
 ```powershell
 ./scripts/Migrate-GuildAvenger.ps1 -ClientRoot 'C:/Program Files (x86)/World of Warcraft/_forever_'
 ```
 
-Скрипт працює з попередніми версіями цього проєкту. Він копіює списки, статистику й налаштування в окремий файл `GuildAvenger.lua`, після чого переносить старий аддон та його файли даних у `GuildAvengerMigrationBackup`. Для попереднього перегляду дій є параметр `-WhatIf`. Запустіть міграцію перед першим запуском Guild Avenger.
+The script migrates data from earlier versions of this project. It copies your lists, statistics, and settings into a separate `GuildAvenger.lua` SavedVariables file, then moves the old addon and its data files to `GuildAvengerMigrationBackup`. Add `-WhatIf` to preview the changes. Run the migration before you first launch Guild Avenger.
 
-## Виявлення та лічильник
+## Detection and death counts
 
-- Ворог зі списку або учасник позначеної гільдії запускає сповіщення, коли його взято в ціль, наведено курсор, з’явилася доступна іменна табличка або WoW надав доступну подію `UNIT_COMBAT`. Сповіщення показує портрет, ім’я, коментар і позначку високого пріоритету. Чат дублює ім’я й коментар. Для одного ворога діє кулдаун 30 секунд.
-- Звичайний пріоритет типово використовує рейд-тривогу, а високий — окремий висхідний сигнал із чотирьох нот. У `/gavenger` натисніть **Звуки…**, щоб вибрати й прослухати штатні звуки WoW для кожного пріоритету. Звук також можна вимкнути окремо для збігів за персонажем і за гільдією або залишити лише для високого пріоритету. Запис конкретного персонажа визначає пріоритет, коментар і налаштування звуку, якщо він також є членом позначеної гільдії.
-- Сповіщення з’являється вгорі екрана в напівпрозорій рамці WoW. Високий пріоритет виділено золотистою рамкою. Перетягніть сповіщення лівою кнопкою миші, щоб змінити позицію. Для перегляду обох стилів використайте `/gavenger test` і `/gavenger test high`. Позиція зберігається між сесіями.
-- **У ціль** і **Пінг небезпеки** доступні поза боєм. Кнопка пінгу з’являється, коли в цілі саме ворог зі сповіщення, а система пінгів WoW увімкнена. Натисніть її, щоб надіслати штатний пінг небезпеки на ціль.
-- Лічильник використовує окремі події WoW `PARTY_KILL` і `UNIT_DIED` та об’єднує повідомлення про ту саму смерть. Смерть учасника записаної гільдії збільшує її спільний лічильник. Якщо персонаж теж є в книзі, окремо збільшується його лічильник. Для цього WoW має надати читабельний ідентифікатор, а аддон має визначити персонажа або його гільдію. `COMBAT_LOG_EVENT_UNFILTERED` у Forever зарезервований клієнтом.
+- Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. The alert shows their portrait, name, note, and high-priority indicator. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
+- By default, normal-priority alerts use the raid warning sound and high-priority alerts play a distinct ascending four-note sound. Open `/gavenger` and click **Звуки…** to select and preview built-in WoW sounds for each priority. You can mute character or guild matches separately, or play sounds for high-priority matches only. When a character and their guild both match, the character entry controls the priority, note, and sound settings.
+- The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
+- The **Target** (**У ціль**) and **Danger Ping** (**Пінг небезпеки**) buttons are available outside combat. The ping button appears when the enemy from the alert is your current target and WoW pings are enabled. Click it to send a built-in danger ping on that target.
+- The death counter uses available `PARTY_KILL` and `UNIT_DIED` events and counts duplicate reports of the same death once. A listed guild member's death increases the guild total. If the character also has an individual entry, their counter increases too. WoW must provide a readable identifier, and the addon must recognize the character or guild. Forever reserves `COMBAT_LOG_EVENT_UNFILTERED` for the game client.
 
-[Події юнітів і бойового логу у WoW: Forever](https://github.com/Gethe/wow-ui-source/tree/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated) · [Команда `/ping` у клієнті Forever](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_ChatFrameBase/Mainline/SlashCommandsOverrides.lua)
+[Forever unit and combat log events](https://github.com/Gethe/wow-ui-source/tree/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated) · [Forever's `/ping` command](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_ChatFrameBase/Mainline/SlashCommandsOverrides.lua)
 
-## Керування
+## Using the watchlist
 
-- Вікно `/gavenger` можна пересувати за заголовок і закривати через Esc. Список прокручується й показує ніки, коментарі, авторів, час додавання та кількість смертей. Клік по кнопці пріоритету в рядку перемикає між **Звичайний** і **Високий**. Записи високого пріоритету йдуть першими. Записи зі старих версій мають звичайний пріоритет.
-- За замовчуванням відкривається вкладка **Усі**. Вкладки **Персонажі** й **Гільдії** звужують список. Фільтр **Лише високий пріоритет** працює в будь-якій вкладці.
-- Пошук за частиною імені, назви гільдії чи коментаря працює разом з іншими фільтрами. У рядку видно час і зону останньої зустрічі, яку зафіксував ваш аддон. Наведіть курсор на цей рядок, щоб також побачити автора запису та дату додавання.
-- **Вилучити позначені** відкриває підтвердження для всіх вибраних рядків, включно з прихованими фільтром або іншою вкладкою.
-- Кнопка **…** відкриває повний коментар. Вона є в списку, у вікні імпорту й у сповіщеннях із коментарем.
-- **Додати ціль** і **Гільдія з цілі** одразу записують персонажа чи гільдію поточної ворожої цілі з коментарем із поля. Якщо ви вже ввели ім’я або назву, кнопки використовують введений текст. Якщо підхопити ціль неможливо, форма пропонує ручне введення. Гільдію можна додати за назвою без цілі, крім власної. Через правий клік по портрету ворожої цілі або фокуса також можна додати персонажа або гільдію з коментарем.
-- Щоб додати запис вручну, WoW має дозволяти перевірити, що персонаж протилежної фракції, доступний для атаки та перебуває поза вашою групою й гільдією. Використайте його повне ім’я та тримайте в цілі, під курсором, у фокусі або в межах видимої іменної таблички.
+- Drag the `/gavenger` window by its title bar and press Esc to close it. The scrollable list includes names, notes, who added each entry and when, and death counts. Click an entry's priority button to switch between normal and high. High-priority entries appear first. Entries from old versions start with normal priority.
+- The **All** (**Усі**) tab opens by default. Switch to **Characters** (**Персонажі**) or **Guilds** (**Гільдії**) to narrow the list. **High priority only** (**Лише високий пріоритет**) works in every tab.
+- Search by part of a character name, guild name, or note alongside the other filters. Each row shows when and where your addon last saw the target. Hover over the row for the author and date added.
+- **Remove selected** (**Вилучити позначені**) asks for confirmation before removing all selected rows, including selections hidden by a filter or another tab.
+- Click **…** to read the full note in the watchlist, import window, or an alert with a note.
+- **Add target** (**Додати ціль**) and **Guild from target** (**Гільдія з цілі**) save the character or guild of your current enemy target and use the note you entered. If you typed a name, the buttons use it. If the target is unavailable, the form prompts for manual entry. You can add a guild by name without targeting a member, except for your own guild. You can also right-click an enemy target or focus portrait to add the character or guild with a note.
+- For manually entered characters, WoW must allow the addon to verify that the person belongs to the opposing faction, can be attacked, and is outside your group and guild. Use the full name and keep the character targeted, under your mouse, in focus, or visible through a nameplate.
 
-| Команда | Дія |
+| Command | Action |
 | --- | --- |
-| `/gavenger` або `/gavenger ui` | Відкрити або закрити вікно. |
-| `/gavenger list` | Показати список персонажів і гільдій з пріоритетами в чаті. |
-| `/gavenger add Ім’я Прізвище Коментар` | Додати ворога. Без аргументів використовується поточна ціль. |
-| `/gavenger del Ім’я Прізвище` | Видалити запис. Без аргументів використовується поточна ціль. |
-| `/gavenger guild add` | Додати гільдію поточної ворожої цілі. Назву в лапках можна доповнити коментарем. |
-| `/gavenger guild del Назва гільдії` | Видалити гільдію зі списку. |
-| `/gavenger share Ім’я Прізвище` | Запропонувати список гільдійцю. Без аргументів використовується поточна ціль. |
-| `/gavenger share guild` | Опублікувати посилання на весь список у гільдчаті. |
-| `/gavenger test` або `/gavenger test high` | Показати тестове сповіщення й відтворити звук звичайного або високого пріоритету відповідно. |
-| `/gavenger download` | Відкрити вікно для копіювання посилання на GitHub. |
-| `/gavenger help` | Показати підказку з командами. |
-| `/gavenger stats` | Відкрити особистий журнал смертей і гільдійні рейтинги. |
+| `/gavenger` or `/gavenger ui` | Open or close the watchlist. |
+| `/gavenger list` | List characters and guilds with their priorities in chat. |
+| `/gavenger add "Character Name" Note` | Add an enemy. With no arguments, use the current target. |
+| `/gavenger del Character Name` | Remove a character. With no arguments, use the current target. |
+| `/gavenger guild add` | Add the current enemy target's guild. Use `/gavenger guild add "Guild Name" Note` to enter a guild and note manually. |
+| `/gavenger guild del Guild Name` | Remove a guild. |
+| `/gavenger share Character Name` | Offer a list to a guildmate. With no arguments, use the current target. |
+| `/gavenger share guild` | Post a link to the full watchlist in guild chat. |
+| `/gavenger test` or `/gavenger test high` | Preview the normal- or high-priority alert and play its sound. |
+| `/gavenger download` | Open a window with a copyable GitHub link. |
+| `/gavenger help` | Show command help. |
+| `/gavenger stats` | Open the personal death journal and guild rankings. |
 
-Позначте потрібні рядки або натисніть **Позначити всі** й зніміть галочки з кількох записів. Ця кнопка вибирає всю книгу, а під час зміни вкладки чи фільтра вибір зберігається. Коли жодного запису не позначено, діалог пропонує поділитися всім списком. Виберіть підказку з іменем гільдійця онлайн мишею або клавішею Tab і натисніть **Надіслати**. Кнопка **У чат гільдії** публікує посилання для всіх гільдійців з Guild Avenger. Посилання діє 30 хвилин, поки автор залишається онлайн у тій самій сесії.
+## Sharing watchlists
 
-Після публікації в гільдчаті з’являється підказка з адресою GitHub для встановлення або оновлення. Guild Avenger приховує підказку, якщо встановлена версія така сама або новіша. Якщо отриманий список надіслали з новішої версії, у чаті з’являється посилання, яке відкриває вікно для копіювання адреси GitHub. Сумісні записи можна прийняти одразу.
+Select the rows you want, or click **Select all** (**Позначити всі**) and clear individual entries. This selects the entire watchlist and keeps your selection when you change tabs or filters. If nothing is selected, the share dialog offers the full list. Choose an online guildmate from the suggestions with the mouse or Tab and click **Send** (**Надіслати**). To share with the guild, click **Post in guild chat** (**У чат гільдії**). The link works for 30 minutes while the sender stays online in the same session.
 
-В обох випадках передавання перевіряє відправника й одержувача за ростером і надсилає пакети з інтервалом 0,25 секунди. Одержувач бачить нові записи, пропозиції зміни коментаря чи пріоритету та пропозиції вилучення. Зміну коментаря, пріоритету чи вилучення потрібно позначити перед прийняттям. Під час обміну повним списком прапорець **Запропонувати вилучені записи** додає пропозиції щодо записів, які ви вилучили за останні 30 днів. Злиття лічильників зберігає більше значення. Для обміну обом гільдійцям потрібен Guild Avenger 3.0.0 або новіший.
+A guild chat post includes a GitHub link for installing or updating the addon. Guild Avenger hides the prompt for recipients with the same version or a newer one. If a list arrives from a newer version, the recipient gets a chat link that opens a window with the copyable GitHub URL. Compatible entries can be accepted right away.
 
-## Статистика
+Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Recipients can review new entries, proposed note or priority changes, and proposed removals. They must select the proposed changes or removals before accepting them. When sharing the full list, enable **Suggest removed entries** (**Запропонувати вилучені записи**) to include entries you removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
 
-- **Мої смерті** зберігають до 100 останніх смертей персонажа з часом, зоною та координатами, якщо WoW їх надає. Ім’я нападника з’являється, якщо його видно в підтвердженому останньому ударі зі звіту про смерть.
-- **Месники** показують останні удари, які гільдійці або їхні активні вихованці завдали по персонажах чи учасниках гільдій із власної Книги Образ. Вбивство цілі, що збігається з двома записами, дає одне очко в рейтингу.
-- **Вороги** показують, хто завдав найбільше підтверджених останніх ударів по гільдійцях, які діляться статистикою. Рейтинг об’єднує повідомлення за ідентифікатором ворожого персонажа і зберігає найбільший підсумок від кожного гільдійця.
-- У вкладці **Вороги** кнопка **До книги** додає ціль із рейтингу. Якщо WoW ще не показує персонажа, запис очікує підтвердження його імені й фракції при зустрічі. Сповіщення про підтвердженого ворога показує кількість відомих вбивств гільдійців.
-- У вкладці **Месники** можна перемкнутися між рейтингом за весь час і поточним тижнем. Тижневий рейтинг починає збиратися з версії 2.4.0 та обнуляється щопонеділка о 00:00 UTC. Рейтинг за весь час зберігається.
-- Увімкніть **Ділитися підсумками з гільдією**, щоб надсилати свої дані аддонам гільдійців. **Оновити рейтинг** збирає підсумки від учасників онлайн, чий обмін увімкнено. Журнал, час і координати окремих смертей зберігаються лише локально. Для обміну рейтингами потрібен Guild Avenger 3.0.0 або новіший.
+## Statistics
 
-## Як долучитися
+- **My Deaths** (**Мої смерті**) keeps up to 100 of your character's recent deaths, with time, zone, and coordinates when WoW provides them. The attacker appears if the death recap shows a confirmed killing blow.
+- **Avengers** (**Месники**) ranks killing blows dealt by guildmates or their active pets to characters and guild members on their watchlists. A kill that matches both a character and a guild entry gives one point in the ranking.
+- **Enemies** (**Вороги**) ranks the enemies with the most confirmed killing blows against guildmates who share their statistics. It groups reports by enemy character ID and keeps the highest reported total from each guildmate.
+- In **Enemies**, click **Add to watchlist** (**До книги**) to add a ranked enemy. If WoW cannot identify the character yet, the entry waits for the next encounter to confirm the name and faction. A confirmed enemy's alert shows their known number of guildmate kills.
+- **Avengers** has all-time and current-week views. Weekly tracking starts in version 2.4.0 and resets every Monday at 00:00 UTC. All-time totals carry over.
+- Enable **Share summaries with the guild** (**Ділитися підсумками з гільдією**) to send your totals to guildmates. **Refresh rankings** (**Оновити рейтинг**) fetches summaries from online members who have sharing enabled. Your journal and the times and coordinates of individual deaths stay local. Ranking sync requires Guild Avenger 3.0.0 or later.
 
-Зробіть форк і відкрийте pull request. Для локальної перевірки скопіюйте папку `GuildAvenger` у папку аддонів і введіть `/reload`. У звіті про помилку вкажіть версію WoW і кроки відтворення.
+## Contributing
 
-Guild Avenger — безкоштовний аддон з відкритим кодом для розваги. Проєкт розвивається без монетизації. Код поширюється за [MIT-ліцензією](LICENSE).
+Fork the repository and open a pull request. To test locally, copy the `GuildAvenger` folder into your AddOns folder and type `/reload` in WoW. When reporting a bug, include your WoW version and the steps to reproduce it.
+
+Guild Avenger is a free, open-source addon made for fun. The project is developed without monetization. The code is available under the [MIT License](LICENSE).
