@@ -4,10 +4,7 @@ local prefix = "GuildAvSeason1"
 local maxTargets, maxHonor = 1000, 2147483647
 local incoming, publisher, lastRequest, lastPublish, lastScore, checkedScope
 
-local function scope()
-    local guild = addon.Scope()
-    if guild and guild ~= "local" and IsInGuild() then return guild end
-end
+local scope = addon.GuildScope
 
 function addon.InitSeason()
     GuildAvengerDB.seasons = GuildAvengerDB.seasons or {}
@@ -158,9 +155,9 @@ end
 function addon.ReceiveSeason(mark, message, channel, senderName)
     if not addon.IsText(mark) or mark ~= prefix or not addon.IsText(channel) or channel ~= "GUILD"
         or not addon.IsText(message) or #message > 150 then return end
-    local sender, name = addon.PlayerName(senderName, true)
+    local sender, name = addon.GuildSender(senderName)
     local guild = scope()
-    if not guild or not sender or not addon.IsGuildMember(sender) or sender == addon.UnitName("player") then return end
+    if not guild or not sender or sender == addon.UnitName("player") then return end
     local season = addon.ActiveSeason()
     if message == "Q" then
         if season then publish(season) end

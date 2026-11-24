@@ -392,7 +392,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 235, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 318, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -406,32 +406,67 @@ function addon.PromptSettings()
         message:SetJustifyH("LEFT")
 
         local reply = checkbox(root, 17, -116, L("autoShareWatchlist"))
-        reply:SetScript("OnClick", function(self)
-            GuildAvengerDB.replyToListRequests = self:GetChecked() and true or nil
-        end)
         local hint = label(root, "GameFontHighlightSmall", color.muted, L("autoShareWatchlistHint"))
         hint:SetPoint("TOPLEFT", 20, -145)
         hint:SetPoint("TOPRIGHT", -20, -145)
         hint:SetJustifyH("LEFT")
         hint:SetMaxLines(2)
 
+        local attackers = checkbox(root, 17, -186, L("shareAttackerDetails"))
+        local attackerHint = label(root, "GameFontHighlightSmall", color.muted, L("shareAttackerDetailsHint"))
+        attackerHint:SetPoint("TOPLEFT", 20, -215)
+        attackerHint:SetPoint("TOPRIGHT", -20, -215)
+        attackerHint:SetJustifyH("LEFT")
+        attackerHint:SetMaxLines(3)
+
         local selected = addon.Language()
+        local scope, identity, savedReply, savedAttackers
         local apply = button(root, L("applyLanguage"), 235, function()
-            if InCombatLockdown() then
+            local languageChanged = selected ~= addon.Language()
+            local nextReply, nextAttackers = reply:GetChecked() == true, attackers:GetChecked() == true
+            local replyChanged, attackersChanged = nextReply ~= savedReply, nextAttackers ~= savedAttackers
+            if languageChanged and InCombatLockdown() then
                 status(message, false, L("reloadAfterCombat"))
                 return
             end
-            GuildAvengerDB.language = selected
-            ReloadUI()
+            if replyChanged or attackersChanged then
+                local ready = addon.UpdateScope()
+                local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
+                if not ready or not scope or currentScope ~= scope or currentIdentity ~= identity then
+                    status(message, false, L("guildPrivacyChanged"))
+                    return
+                end
+                if replyChanged then addon.SetAutoReply(nextReply) end
+                if attackersChanged then addon.SetAttackerSharing(nextAttackers) end
+            end
+            root:Hide()
+            if languageChanged then
+                GuildAvengerDB.language = selected
+                ReloadUI()
+            end
         end)
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
+        local function updateApply()
+            local languageChanged = selected ~= addon.Language()
+            apply.label:SetText(L(languageChanged and "applyLanguage" or "applySettings"))
+            enabled(apply, languageChanged or (reply:GetChecked() == true) ~= savedReply
+                or (attackers:GetChecked() == true) ~= savedAttackers)
+            status(message, true, L(languageChanged and "languageHint" or "privacySettingsHint"))
+        end
+        reply:SetScript("OnClick", updateApply)
+        attackers:SetScript("OnClick", updateApply)
         root:SetScript("OnShow", function()
+            addon.UpdateScope()
+            scope, identity = addon.GuildPrivacyIdentity()
+            savedReply, savedAttackers = addon.AutoReplyEnabled(), scope ~= nil and addon.AttackerSharing()
             selected = addon.Language()
+            reply:SetChecked(savedReply)
+            reply:SetEnabled(scope ~= nil)
+            attackers:SetChecked(savedAttackers)
+            attackers:SetEnabled(scope ~= nil)
             dropdown:GenerateMenu()
-            enabled(apply, false)
-            reply:SetChecked(GuildAvengerDB.replyToListRequests == true)
-            status(message, true, L("languageHint"))
+            updateApply()
         end)
         dropdown:SetupMenu(function(_, menu)
             local function isSelected(language)
@@ -439,8 +474,7 @@ function addon.PromptSettings()
             end
             local function selectLanguage(language)
                 selected = language
-                enabled(apply, selected ~= addon.Language())
-                status(message, true, L("languageHint"))
+                updateApply()
             end
             menu:CreateRadio("English", isSelected, selectLanguage, "enUS")
             menu:CreateRadio("Українська", isSelected, selectLanguage, "ukUA")
@@ -1042,6 +1076,11 @@ local function createDialog()
         end
     end)
     root.publish:SetPoint("BOTTOMLEFT", 18, 13)
+    root.revoke = button(root, L("revokeWatchlistLinks"), 175, function()
+        status(root.status, addon.RevokeWatchlistLinks())
+        enabled(root.revoke, false)
+    end)
+    root.revoke:SetPoint("BOTTOMLEFT", 18, 48)
     root.removals = checkbox(root, 18, -309, L("suggestRemovals"))
     root:SetScript("OnHide", function()
         root.action = nil
@@ -1064,10 +1103,12 @@ local function openDialog(options)
     dialog.confirm.label:SetText(options.confirm)
     dialog.cancel.label:SetText(options.cancel or L("cancel"))
     dialog.autocomplete = options.autocomplete
-    dialog:SetHeight(options.autocomplete and (options.removals and 365 or 339) or 190)
+    dialog:SetHeight(options.autocomplete and (options.removals and 407 or 381) or 190)
     dialog.status:ClearAllPoints()
     dialog.status:SetPoint("TOPLEFT", 18, options.autocomplete and -278 or -118)
     dialog.publish:SetShown(options.autocomplete == true)
+    dialog.revoke:SetShown(options.autocomplete == true)
+    enabled(dialog.revoke, options.autocomplete == true and addon.HasWatchlistLinks())
     dialog.removals:SetShown(options.removals == true)
     dialog.removals:SetChecked(false)
     for _, choice in ipairs(dialog.suggestions) do
@@ -1146,7 +1187,6 @@ submitGuild = function()
 end
 
 function addon.PromptShare()
-    local _, target = addon.UnitName("target")
     addon.UpdateScope()
     local scope = addon.Scope()
     local selection
@@ -1163,11 +1203,12 @@ function addon.PromptShare()
         return action(selection, removals)
     end
     addon.RefreshRoster()
+    local target = addon.ShareTargetName()
     openDialog({
         title = L("shareWatchlist"),
         text = (selection and L("selectedCount", selectionSize(selection)) or L("entireWatchlist"))
             .. "\n" .. L("guildmateFullName"),
-        value = target, limit = addon.NameLimit, confirm = L("send"), autocomplete = true,
+        value = target, limit = addon.NameLimit + 64, confirm = L("send"), autocomplete = true,
         removals = not selection and scope ~= nil and scope ~= "local" and #addon.RemovalProposals() > 0,
         action = function(input) return send(addon.Share, input) end,
         publishAction = function() return send(addon.Publish) end,

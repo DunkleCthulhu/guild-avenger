@@ -4,6 +4,7 @@ local prefix = "GuildAvStats1"
 local maxCount = 2147483647
 local journalLimit = 100
 local heldDeath, latestDeath, sendTicker, lastRequest, lastReply
+local statsRevision, attackersRevision = 0, 0
 
 local function isNumber(value)
     return addon.Ordinary(value) and type(value) == "number"
@@ -16,8 +17,8 @@ local function playerGUID(guid)
 end
 
 local function guildData()
-    local scope = addon.Scope()
-    if not scope or scope == "local" or not IsInGuild() then return end
+    local scope = addon.GuildScope()
+    if not scope then return end
     local guilds = GuildAvengerDB.stats.guilds
     if not guilds[scope] then guilds[scope] = { own = {}, peers = {} } end
     return guilds[scope], scope
@@ -136,7 +137,7 @@ local function identifyKiller(entry, hit, guid, score)
             local key, full = addon.UnitName(unit)
             name = full or name
             local faction, own = UnitFactionGroup(unit), UnitFactionGroup("player")
-            if unit == "player" or (key and addon.IsGuildMember(key))
+            if unit == "player" or (key and addon.IsGuildAlly(key))
                 or (addon.IsText(faction) and addon.IsText(own) and faction == own) then
                 hostile = false
             end
@@ -184,6 +185,18 @@ function addon.StatsSharing()
     return score and score.share == true or false
 end
 
+function addon.AttackerSharing()
+    local score = ownScore()
+    return score and score.shareAttackers == true or false
+end
+
+function addon.SetAttackerSharing(enabled)
+    local score = ownScore()
+    if not score then return end
+    score.shareAttackers = enabled and true or nil
+    attackersRevision = attackersRevision + 1
+end
+
 local function send(message)
     return C_ChatInfo.SendAddonMessage(prefix, message, "GUILD")
 end
@@ -199,9 +212,13 @@ local function publish()
     if score.honor and score.honor > 0 then
         packets[#packets + 1] = ("H\t%d\t%d\t%d"):format(score.honor, week, weeklyHonor(score, week))
     end
-    for guid, enemy in pairs(score.enemies) do
-        packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
+    local firstAttacker = #packets + 1
+    if score.shareAttackers then
+        for guid, enemy in pairs(score.enemies) do
+            packets[#packets + 1] = ("E\t%s\t%d\t%s"):format(guid, enemy.count, enemy.name)
+        end
     end
+    local statsConsent, attackersConsent = statsRevision, attackersRevision
     local index, progressAt = 1, GetTime()
     local function stop()
         sendTicker:Cancel()
@@ -210,7 +227,8 @@ local function publish()
     sendTicker = C_Timer.NewTicker(0.25, function()
         local current, currentScope, currentKey = ownScore()
         if currentScope ~= scope or current ~= score or not current.share or not addon.IsGuildMember(currentKey)
-            or GetTime() - progressAt >= 60 then
+            or statsConsent ~= statsRevision or GetTime() - progressAt >= 60
+            or (index >= firstAttacker and (not current.shareAttackers or attackersConsent ~= attackersRevision)) then
             stop()
             return
         end
@@ -227,6 +245,7 @@ function addon.SetStatsSharing(enabled)
     local score = ownScore()
     if not score then return end
     score.share = enabled and true or nil
+    statsRevision = statsRevision + 1
     if enabled then publish() end
 end
 
@@ -247,9 +266,9 @@ end
 function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix
         or not addon.IsText(channel) or channel ~= "GUILD" or not addon.IsText(message) or #message > 180 then return end
-    local key, name = addon.PlayerName(sender, true)
+    local key, name = addon.GuildSender(sender)
     local own, scope, ownKey = ownScore()
-    if not own or not key or key == ownKey or not addon.IsGuildMember(key) then return end
+    if not own or not key or key == ownKey then return end
     if message == "Q" then
         local now = GetTime()
         if own.share and (not lastReply or now - lastReply >= 45) then

@@ -52,9 +52,11 @@ local function playerName(value, fromWire)
         return
     end
     -- Forever sends a layer suffix on some roster and chat names.
+    local suffix
     if fromWire then
-        value = value:match("^([^%s%-]+ [^%s%-]+)%-%S+$")
-            or value:match("^([^%s%-]+%-[^%s%-]+)%-%S+$") or value
+        local name
+        name, suffix = value:match("^([^%s%-]+[ %-][^%s%-]+)%-(%S+)$")
+        value = name or value
     end
     if #value > nameLimit then
         return
@@ -62,7 +64,7 @@ local function playerName(value, fromWire)
     local first, surname = value:match("^([^%s%-]+)[%s%-]+([^%s%-]+)$")
     if first and not (first .. surname):gsub("'", ""):find("[%d%p]") then
         local full = first .. " " .. surname
-        return lowerName(full), full
+        return lowerName(full), full, suffix and lowerName(suffix)
     end
 end
 
@@ -118,14 +120,21 @@ local function indexGUIDs()
     end
 end
 
+local function guildClub()
+    local club = C_Club.GetGuildClubId()
+    if ordinary(club) and club then return tostring(club) end
+end
+
+function addon.GuildScope()
+    local current = IsInGuild() and guildClub()
+    if current and current == listID then return current end
+end
+
 local function updateScope()
     local id = "local"
     if IsInGuild() then
-        local club = C_Club.GetGuildClubId()
-        if not ordinary(club) or not club then
-            return false
-        end
-        id = tostring(club)
+        id = guildClub()
+        if not id then return false end
     end
     if id == listID then
         return true
@@ -151,7 +160,7 @@ local function updateScope()
 end
 
 local function isAllyName(key)
-    if key == unitName("player") or addon.IsGuildMember(key) then
+    if key == unitName("player") or addon.IsGuildAlly(key) then
         return true
     end
     local raid = IsInRaid()
@@ -192,7 +201,7 @@ local function enemyUnit(unit, allowDead)
         return
     end
     local key, name = unitName(unit)
-    if not key or key == unitName("player") or addon.IsGuildMember(key) then
+    if not key or key == unitName("player") or addon.IsGuildAlly(key) then
         return
     end
     local guid = UnitGUID(unit)
@@ -707,6 +716,7 @@ addon.EnemyEntry = enemyEntry
 addon.UpdateScope = updateScope
 addon.Scope = function() return listID end
 addon.Entries = sortedEntries
+addon.WatchlistRecord = function(key) return entries and entries[key] end
 addon.EligibleRecord = eligibleRecord
 addon.Merge = mergeEntries
 addon.Add = addEnemy
@@ -734,6 +744,7 @@ local function showHelp()
     say(L("helpGuilds"))
     say(L("helpSharing"))
     say(L("helpRequestLists"))
+    say(L("helpRevokeLinks"))
     say(L("helpAlerts"))
     say(L("helpStats"))
     say(L("helpSettings"))
@@ -769,6 +780,8 @@ local function slash(input)
         end
     elseif command == "request" then
         _, message = addon.RequestWatchlists()
+    elseif command == "revoke" then
+        _, message = addon.RevokeWatchlistLinks()
     elseif command == "test" then
         addon.ShowAlert({ name = "Guild Avenger", note = L("testAlert"), unit = "player",
             high = rest:lower() == "high" }, true)

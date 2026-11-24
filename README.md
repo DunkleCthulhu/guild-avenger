@@ -54,6 +54,7 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger share Character Name` | Offer a list to a guildmate. With no arguments, use the current target. |
 | `/gavenger share guild` | Post a link to the full watchlist in guild chat. |
 | `/gavenger request` | Ask online guildmates for their watchlists. |
+| `/gavenger revoke` | Revoke outgoing watchlist links for this session. |
 | `/gavenger test` or `/gavenger test high` | Preview the normal- or high-priority alert and play its sound. |
 | `/gavenger download` | Open a window with a copyable GitHub link. |
 | `/gavenger help` | Show command help. |
@@ -62,13 +63,15 @@ The script migrates data from earlier versions of this project. It copies your l
 
 ## Sharing watchlists
 
-Select the rows you want, or click **Select all** (**Позначити всі**) and clear individual entries. This selects the entire watchlist and keeps your selection when you change tabs or filters. If nothing is selected, the share dialog offers the full list. Choose an online guildmate from the suggestions with the mouse or Tab and click **Send** (**Надіслати**). To share with the guild, click **Post in guild chat** (**У чат гільдії**). The link works for 30 minutes while the sender stays online in the same session.
+Select the rows you want, or click **Select all** (**Позначити всі**) and clear individual entries. This selects the entire watchlist and keeps your selection when you change tabs or filters. If nothing is selected, the share dialog offers the full list. Choose an online guildmate from the suggestions with the mouse or Tab and click **Send** (**Надіслати**). To share with the guild, click **Post in guild chat** (**У чат гільдії**). Links last up to 30 minutes in the current session. In 3.3.1, editing a shared note or removing a shared entry invalidates the link. **Revoke watchlist links** stops future downloads and ongoing transfers from those links. Guildmates keep copies they already received.
 
 A guild chat post includes a GitHub link for installing or updating the addon. Guild Avenger hides the prompt for recipients with the same version or a newer one. If a list arrives from a newer version, the recipient gets a chat link that opens a window with the copyable GitHub URL. Compatible entries can be accepted right away.
 
-Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Recipients can review new entries, proposed note or priority changes, and proposed removals. They must select the proposed changes or removals before accepting them. When sharing the full list, enable **Suggest removed entries** (**Запропонувати вилучені записи**) to include entries you removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
+Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Version 3.3.1 keeps the roster’s full address and stops the exchange when a recipient cannot be verified unambiguously. Recipients can select which entries, changes, and removals to accept. When sharing the full list, **Suggest removed entries** (**Запропонувати вилучені записи**) includes entries removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
 
 **Request guild watchlists** asks online guildmates running 3.2.0 or later for their lists. They can send their list from the chat link or opt in to automatic replies in **Settings**. Replies include current characters, guilds, notes, priorities, and death counts. In 3.3.0, open **Inbox** to review replies together. The same enemy occupies one row with its sources listed. Use **Notes** to choose from differing comments and **Select all new** to mark new entries. Replies that arrive while you are reviewing remain in the inbox.
+
+In 3.3.1, automatic replies are off until you apply permission for the current character and guild. The previous account-wide permission is reset on upgrade. **Cancel** discards settings changes. Applying a change that turns automatic replies off also stops queued replies. Shared records include notes, authors, dates added, and death counts.
 
 ## Statistics
 
@@ -79,7 +82,7 @@ Both sharing methods verify the sender and recipient against the guild roster an
 - In **Enemies**, click **Add to watchlist** (**До книги**) to add a ranked enemy. If WoW cannot identify the character yet, the entry waits for the next encounter to confirm the name and faction. A confirmed enemy's alert shows their known number of guildmate kills.
 - **Avengers** and **Killing blows** both have all-time and current-week views. Honor tracking starts in 3.2.0. Earlier killing blow totals carry over. Weekly totals reset every Monday at 00:00 UTC.
 - **Honor journal** shows the latest 100 recognizable Honor awards for your character, with the target when known and the reason the award counted or was left out. It also shows when an award counted towards the guild race.
-- Enable **Share summaries with the guild** (**Ділитися підсумками з гільдією**) to send your totals to guildmates. **Refresh rankings** (**Оновити рейтинг**) fetches summaries from online members who have sharing enabled. Your journal and the times and coordinates of individual deaths stay local. Honor sync requires Guild Avenger 3.2.0 or later. Killing blow and enemy totals can still sync with versions 3.0.0 and later.
+- Enable **Share summaries with the guild** (**Ділитися підсумками з гільдією**) to send your ranking totals to guildmates. In 3.3.1, sending attackers’ names, game GUIDs, and each attacker’s kill count requires the separate **Share attacker details with the guild** permission in **Settings**. **Refresh rankings** fetches summaries from online members who have sharing enabled. Journals, times, and coordinates stay local. Honor sync requires Guild Avenger 3.2.0 or later. Killing blow and enemy totals can still sync with versions 3.0.0 and later.
 
 ### Weekly guild race
 
