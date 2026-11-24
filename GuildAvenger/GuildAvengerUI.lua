@@ -1,7 +1,7 @@
-local _, addon = ...
+local addonName, addon = ...
 local L = addon.Text
 local panel, dialog, review, toast, download, minimapButton, soundWindow
-local statsWindow, commentWindow, settingsWindow
+local statsWindow, commentWindow, settingsWindow, bugReport
 local offers = {}
 local rowCount, mainRowCount, rowHeight, rowGap = 7, 7, 42, 4
 local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
@@ -408,7 +408,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 318, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 364, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -434,6 +434,19 @@ function addon.PromptSettings()
         attackerHint:SetPoint("TOPRIGHT", -20, -215)
         attackerHint:SetJustifyH("LEFT")
         attackerHint:SetMaxLines(3)
+
+        local rule = root:CreateTexture(nil, "ARTWORK")
+        rule:SetPoint("TOPLEFT", 20, -265)
+        rule:SetPoint("TOPRIGHT", -20, -265)
+        rule:SetHeight(1)
+        rule:SetColorTexture(unpack(color.border))
+        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -278)
+        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -270)
+        local authors = C_AddOns.GetAddOnMetadata(addonName, "Author") or ""
+        local credits = label(root, "GameFontHighlightSmall", color.muted, L("addonCredits", authors))
+        credits:SetPoint("TOPLEFT", 20, -298)
+        credits:SetPoint("TOPRIGHT", -20, -298)
+        credits:SetJustifyH("LEFT")
 
         local selected = addon.Language()
         local scope, identity, savedReply, savedAttackers
@@ -570,7 +583,8 @@ local function createPanel()
     icon:SetPoint("LEFT")
     icon:SetTexture(bookIcon)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    label(header, "GameFontNormalLarge", color.gold, "Guild Avenger"):SetPoint("LEFT", 29, 0)
+    label(header, "GameFontNormalLarge", color.gold, "Guild Avenger"):SetPoint("TOPLEFT", 29, -2)
+    label(header, "GameFontHighlightSmall", color.muted, L("createdByGuild")):SetPoint("BOTTOMLEFT", 29, 1)
     root.search = input(root, 210, addon.NoteLimit)
     root.search:SetTextInsets(8, 30, 0, 0)
     root.search:SetPoint("LEFT", header, "LEFT", 201, 0)
@@ -605,21 +619,21 @@ local function createPanel()
     button(root, L("settings"), 118, addon.PromptSettings):SetPoint("TOPRIGHT", -44, -15)
 
     label(root, "GameFontHighlightSmall", color.muted, L("nameField")):SetPoint("TOPLEFT", 20, -57)
-    root.name = input(root, 518, addon.NameLimit)
+    root.name = input(root, 398, addon.NameLimit)
     root.name:SetPoint("TOPLEFT", 20, -74)
-    root.submit = button(root, L("addTarget"), 96, submit)
+    root.submit = button(root, L("addTarget"), 104, submit)
     root.submit:SetPoint("LEFT", root.name, "RIGHT", 8, 0)
-    label(root, "GameFontHighlightSmall", color.muted, L("optionalNote")):SetPoint("TOPLEFT", 20, -116)
-    root.note = input(root, 518, addon.NoteLimit)
-    root.note:SetPoint("TOPLEFT", 20, -133)
-    root.cancel = button(root, L("cancel"), 96, function()
+    root.guild = button(root, L("addGuild"), 104, submitGuild)
+    root.guild:SetPoint("LEFT", root.submit, "RIGHT", 8, 0)
+    root.cancel = button(root, L("cancel"), 104, function()
         resetForm()
         addon.RefreshUI()
         status(root.status, true, "")
     end)
-    root.cancel:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
-    root.guild = button(root, L("addGuild"), 96, submitGuild)
-    root.guild:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
+    root.cancel:SetPoint("LEFT", root.submit, "RIGHT", 8, 0)
+    label(root, "GameFontHighlightSmall", color.muted, L("optionalNote")):SetPoint("TOPLEFT", 20, -116)
+    root.note = input(root, 622, addon.NoteLimit)
+    root.note:SetPoint("TOPLEFT", 20, -133)
     root.name:SetScript("OnEnterPressed", submit)
     root.name:SetScript("OnTextChanged", function(_, userInput)
         if userInput then
@@ -1013,12 +1027,13 @@ function addon.InitMinimap()
     place()
 end
 
-function addon.PromptDownload(url, description)
+local function promptLink(url, title, description)
     if not download then
         local root = window("GuildAvengerDownload", 520, 158, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(30)
         tinsert(UISpecialFrames, "GuildAvengerDownload")
-        label(root, "GameFontNormalLarge", color.gold, L("downloadTitle")):SetPoint("TOPLEFT", 18, -15)
+        root.title = label(root, "GameFontNormalLarge", color.gold)
+        root.title:SetPoint("TOPLEFT", 18, -15)
         root.description = label(root, "GameFontHighlight", color.white)
         root.description:SetPoint("TOPLEFT", 18, -43)
         root.description:SetWidth(484)
@@ -1029,14 +1044,89 @@ function addon.PromptDownload(url, description)
         root.field:SetScript("OnMouseUp", function(self) self:HighlightText() end)
         label(root, "GameFontHighlightSmall", color.muted, L("copyLink")):SetPoint("BOTTOMLEFT", 18, 21)
         button(root, L("close"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -18, 13)
-        root:SetScript("OnHide", function() root.field:ClearFocus() end)
+        root:SetScript("OnHide", function()
+            root.field:ClearFocus()
+            root.field:SetText("")
+        end)
         download = root
     end
+    download.title:SetText(title)
     download.description:SetText(description)
+    download.field:SetMaxBytes(#url)
     download.field:SetText(url)
     download:Show()
     download.field:SetFocus()
     download.field:HighlightText()
+end
+
+function addon.PromptDownload(url, description)
+    promptLink(url, L("downloadTitle"), description)
+end
+
+local function issueParameter(text)
+    return (text:gsub("([^A-Za-z0-9_.~%-])", function(byte)
+        return ("%%%02X"):format(byte:byte())
+    end))
+end
+
+function addon.PromptBugReport()
+    if not bugReport then
+        local root = window("GuildAvengerBugReport", 520, 270, "FULLSCREEN_DIALOG")
+        root:SetFrameLevel(31)
+        tinsert(UISpecialFrames, "GuildAvengerBugReport")
+        label(root, "GameFontNormalLarge", color.gold, L("reportBug")):SetPoint("TOPLEFT", 18, -15)
+        local instructions = label(root, "GameFontHighlight", color.white, L("bugReportHint"))
+        instructions:SetPoint("TOPLEFT", 18, -43)
+        instructions:SetWidth(484)
+        instructions:SetJustifyH("LEFT")
+
+        local scroll = CreateFrame("ScrollFrame", nil, root, "ScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", 18, -97)
+        scroll:SetSize(468, 127)
+        fill(scroll, color.border, 0, -2)
+        fill(scroll, color.inset, 1, -1)
+        local field = CreateFrame("EditBox", nil, scroll)
+        root.field = field
+        field:SetSize(468, 127)
+        field:SetFontObject(GameFontHighlight)
+        field:SetAutoFocus(false)
+        field:SetMultiLine(true)
+        field:SetMaxBytes(600)
+        field:SetTextInsets(8, 8, 6, 6)
+        field:EnableMouse(true)
+        scroll:SetScrollChild(field)
+        ScrollingEdit_OnLoad(field)
+        field:SetScript("OnCursorChanged", ScrollingEdit_OnCursorChanged)
+        field:SetScript("OnEscapePressed", function() root:Hide() end)
+
+        local function comment()
+            return field:GetText():match("^%s*(.-)%s*$")
+        end
+        local send = button(root, L("send"), 118, function()
+            local text = comment()
+            if text == "" then return end
+            local version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "?"
+            local body = "Guild Avenger version: " .. version .. "\n\n" .. text
+            local url = "https://github.com/DunkleCthulhu/guild-avenger/issues/new?title=Guild%20Avenger%20bug%20report"
+                .. "&body=" .. issueParameter(body)
+            root:Hide()
+            promptLink(url, L("reportBug"), L("bugReportLinkHint"))
+        end)
+        send:SetPoint("BOTTOMRIGHT", -18, 13)
+        button(root, L("cancel"), 100, function() root:Hide() end):SetPoint("RIGHT", send, "LEFT", -8, 0)
+        field:SetScript("OnTextChanged", function(self)
+            ScrollingEdit_OnTextChanged(self, scroll)
+            enabled(send, comment() ~= "")
+        end)
+        root:SetScript("OnHide", function()
+            field:ClearFocus()
+            field:SetText("")
+        end)
+        enabled(send, false)
+        bugReport = root
+    end
+    bugReport:Show()
+    bugReport.field:SetFocus()
 end
 
 local presentOffer

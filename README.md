@@ -2,7 +2,13 @@
 
 **English** · [Українська](README.uk.md)
 
-Guild Avenger is a free, open-source PvP addon for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates.
+Guild Avenger is a free, open-source PvP addon by the **False Memory** guild for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates.
+
+**Authors** · `DunkleCthulhu`, `@ne_multik`, `@nikulin_daniil`.
+
+## Reporting a bug
+
+Open **Settings → Report a bug**, describe what happened, and click **Send**. Copy the link into your browser to review and submit the public report on GitHub. The draft contains your comment and the addon version. [Guild Avenger Issues](https://github.com/DunkleCthulhu/guild-avenger/issues)
 
 ## Installation
 
