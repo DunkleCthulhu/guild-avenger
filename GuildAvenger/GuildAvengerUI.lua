@@ -3,7 +3,7 @@ local L = addon.Text
 local panel, dialog, review, toast, download, minimapButton, soundWindow
 local statsWindow, commentWindow, settingsWindow
 local offers = {}
-local rowCount, mainRowCount, rowHeight = 7, 7, 44
+local rowCount, mainRowCount, rowHeight, rowGap = 7, 7, 42, 4
 local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
 local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
@@ -12,6 +12,9 @@ local color = {
     panel = { 0.11, 0.095, 0.073, 0.98 },
     inset = { 0.059, 0.052, 0.04, 1 },
     button = { 0.20, 0.13, 0.14, 1 },
+    row = { 0.125, 0.108, 0.086, 1 },
+    rowAlt = { 0.095, 0.082, 0.067, 1 },
+    rowSelected = { 0.21, 0.16, 0.10, 1 },
     red = { 1, 0.28, 0.26, 1 },
     gold = { 0.95, 0.75, 0.50, 1 },
     muted = { 0.79, 0.73, 0.63, 1 },
@@ -171,8 +174,9 @@ end
 
 local function updateAddLabels()
     local manual = manualName()
-    panel.submit.label:SetText(panel.editing and L("save") or (manual and L("add") or L("addTarget")))
-    panel.guild.label:SetText(manual and L("addGuild") or L("guildFromTarget"))
+    local targetGuild = not manual and not panel.editing and addon.EnemyEntry("target", "G")
+    panel.submit.label:SetText(panel.editing and L("save") or (manual and L("addCharacter") or L("addTarget")))
+    panel.guild.label:SetText(targetGuild and L("guildFromTarget") or L("addGuild"))
 end
 
 local function searchText(value)
@@ -189,10 +193,16 @@ local function renderRows()
         row:SetShown(entry ~= nil)
         if entry then
             local key = addon.RecordKey(entry)
-            row.check:SetChecked(panel.selected[key] == true)
+            local selected = panel.selected[key] == true
+            row.check:SetChecked(selected)
+            row.border:SetColorTexture(unpack(selected and color.gold or color.border))
+            row.background:SetColorTexture(unpack(selected and color.rowSelected or row.tint))
             row.name:SetText(entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name)
+            row.name:SetTextColor(unpack(entry.kind == "G" and color.gold or color.white))
             row.note:SetText(entry.note)
-            row.metadata:SetText(lastSeen(entry) or (addon.IsPendingEntry(entry) and L("pendingVerification") or metadata(entry)))
+            local guildStatus = entry.kind == "G" and addon.GuildWatchStatus(key, entry.name)
+            row.metadata:SetText((guildStatus and L(guildStatus)) or lastSeen(entry)
+                or (addon.IsPendingEntry(entry) and L("pendingVerification") or metadata(entry)))
             row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and L("high") or L("normal"))
             row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
@@ -544,7 +554,7 @@ local function createFilters(root)
 end
 
 local function createPanel()
-    local root = window("GuildAvengerPanel", 662, 622, "DIALOG")
+    local root = window("GuildAvengerPanel", 662, 636, "DIALOG")
     root:SetMovable(true)
     root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GuildAvengerPanel")
@@ -608,7 +618,7 @@ local function createPanel()
         status(root.status, true, "")
     end)
     root.cancel:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
-    root.guild = button(root, L("guildFromTarget"), 96, submitGuild)
+    root.guild = button(root, L("addGuild"), 96, submitGuild)
     root.guild:SetPoint("LEFT", root.note, "RIGHT", 8, 0)
     root.name:SetScript("OnEnterPressed", submit)
     root.name:SetScript("OnTextChanged", function(_, userInput)
@@ -624,7 +634,7 @@ local function createPanel()
     local list = CreateFrame("Frame", nil, root)
     list:SetPoint("TOPLEFT", 20, -234)
     list:SetPoint("TOPRIGHT", -20, -234)
-    list:SetHeight(mainRowCount * rowHeight + 4)
+    list:SetHeight(mainRowCount * (rowHeight + rowGap) + rowGap)
     list:EnableMouseWheel(true)
     list:SetScript("OnMouseWheel", function(_, delta)
         root.scroll:SetValue(root.scroll:GetValue() - delta)
@@ -635,10 +645,13 @@ local function createPanel()
     root.empty:SetPoint("CENTER")
     for index = 1, mainRowCount do
         local row = CreateFrame("Frame", nil, list)
-        row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * rowHeight)
-        row:SetPoint("TOPRIGHT", -16, -2 - (index - 1) * rowHeight)
-        row:SetHeight(rowHeight - 1)
-        styleRow(row, index)
+        local y = -rowGap - (index - 1) * (rowHeight + rowGap)
+        row:SetPoint("TOPLEFT", 4, y)
+        row:SetPoint("TOPRIGHT", -16, y)
+        row:SetHeight(rowHeight)
+        row.tint = index % 2 == 0 and color.rowAlt or color.row
+        row.border = fill(row, color.border, 0, 0)
+        row.background = fill(row, row.tint, 1, 1)
         row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
         row.check:SetSize(24, 24)
         row.check:SetPoint("LEFT", 5, 0)
@@ -648,12 +661,12 @@ local function createPanel()
             addon.RefreshUI()
         end)
         row.name = label(row, "GameFontHighlight", color.white)
-        row.name:SetPoint("TOPLEFT", 34, -5)
+        row.name:SetPoint("TOPLEFT", 34, -4)
         row.name:SetWidth(286)
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
         row.note = label(row, "GameFontHighlightSmall", color.muted)
-        row.note:SetPoint("TOPLEFT", 34, -20)
+        row.note:SetPoint("TOPLEFT", 34, -17)
         row.note:SetJustifyH("LEFT")
         row.comment = commentPreview(row, row.note, 286, 1, function()
             local entry = row.entry
@@ -661,7 +674,7 @@ local function createPanel()
             return note .. "\n\n" .. metadata(entry) .. "\n" .. (lastSeen(entry) or L("neverSeen")), entry.name
         end)
         row.metadata = label(row, "GameFontHighlightSmall", color.muted)
-        row.metadata:SetPoint("TOPLEFT", 34, -32)
+        row.metadata:SetPoint("TOPLEFT", 34, -29)
         row.metadata:SetWidth(286)
         row.metadata:SetJustifyH("LEFT")
         row.metadata:SetWordWrap(false)
@@ -717,7 +730,7 @@ local function createPanel()
     root.scroll:SetThumbTexture(thumb)
     root.scroll:SetScript("OnValueChanged", renderRows)
     root.soundSettings = button(root, L("sounds"), 96, addon.PromptSounds)
-    root.soundSettings:SetPoint("TOPLEFT", 20, -554)
+    root.soundSettings:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -8)
     local statsButton = button(root, L("statistics"), 110, function() addon.OpenStats() end)
     statsButton:SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
     root.pull = button(root, L("requestWatchlists"), 184, function()

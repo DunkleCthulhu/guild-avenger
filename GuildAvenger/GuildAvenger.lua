@@ -137,9 +137,28 @@ local function indexGUIDs()
     end
 end
 
-local function guildClub()
+local function guildClubID()
     local club = C_Club.GetGuildClubId()
-    if ordinary(club) and club then return tostring(club) end
+    if ordinary(club) then return club end
+end
+
+local function guildClub()
+    local club = guildClubID()
+    if club then return tostring(club) end
+end
+
+local function guildWatchStatus(key, name)
+    if not IsInGuild() then return end
+    local ownKey, ownName = guildName((GetGuildInfo("player")))
+    if not ownKey and C_Club.GetClubInfo then
+        local club = guildClubID()
+        local info = club and C_Club.GetClubInfo(club)
+        if ordinary(info) and type(info) == "table" then
+            ownKey, ownName = guildName(info.name)
+        end
+    end
+    if not ownKey then return "guildPendingVerification" end
+    if key == ownKey or searchLower(name) == searchLower(ownName) then return "ownGuild" end
 end
 
 function addon.GuildScope()
@@ -304,13 +323,17 @@ local function sighting(entry, now, zone)
     return true
 end
 
+local function watchedGuild(key)
+    local guild = entries and key and entries[key]
+    if guild and not guildWatchStatus(key, guild.name) then return guild end
+end
+
 local function matchGuild(unit, key, faction, guid)
     local guildKey = guildName((GetGuildInfo(unit)))
-    local guild = guildKey and entries[guildKey]
     if guid and guildKey then
         observedGuilds[guid] = { guild = guildKey, player = key, faction = faction, at = GetTime() }
     end
-    return guild, guildKey
+    return watchedGuild(guildKey), guildKey
 end
 
 function addon.HonorTarget(victim)
@@ -319,7 +342,7 @@ function addon.HonorTarget(victim)
     local personal = entries[key]
     local function result(guild, verified)
         local byName = personal and not isPendingEntry(personal) and (verified or isDifferentFaction(personal.faction))
-        local byGuild = guild and entries[guild] ~= nil
+        local byGuild = watchedGuild(guild) ~= nil
         local reason = byName and (byGuild and "honorBoth" or "honorCharacter") or (byGuild and "honorGuild")
         return key, guild, reason or nil
     end
@@ -388,7 +411,7 @@ local function groupGuildAlert(guildKey, entry, player, unit, guid)
     C_Timer.After(1.25, function()
         if guildAlerts[guildKey] ~= burst then return end
         guildAlerts[guildKey] = nil
-        if not entries or entries[guildKey] ~= entry then return end
+        if watchedGuild(guildKey) ~= entry then return end
         if burst.count == 1 then
             warn(entry, player, unit, guid)
         else
@@ -469,7 +492,7 @@ local function recordDeath(guid, killer)
     end
     local observation = observedGuilds[guid]
     local guild = observation and now - observation.at <= guildObservationLifetime
-        and isDifferentFaction(observation.faction) and not isAllyName(observation.player) and entries[observation.guild]
+        and isDifferentFaction(observation.faction) and not isAllyName(observation.player) and watchedGuild(observation.guild)
     if not personal and not guild then return end
     local death = deaths[guid]
     if not death or now - death.at >= deathCooldown then death = { at = now } end
@@ -547,18 +570,13 @@ local function addEnemy(input, reason, fromUnit, kind)
     local pending = kind ~= "G" and wanted and not fromUnit and not unit
     if pending then key, name = wanted, writtenName end
     if kind == "G" and wanted and not fromUnit and not key then
-        local ownGuild = guildName((GetGuildInfo("player")))
-        if IsInGuild() and not ownGuild then
-            return false, L("guildLoading")
-        end
-        if wanted == ownGuild then
-            return false, L("ownGuild")
-        end
         key, name = wanted, writtenName
     end
     if not key then
         return false, kind == "G" and L("guildNotVisible") or L("invalidEnemy")
     end
+    local guildStatus = kind == "G" and guildWatchStatus(key, name)
+    if guildStatus == "ownGuild" then return false, L(guildStatus) end
     local pendingName = kind ~= "G" and searchLower(name)
     if entries[key] or (pendingName and pendingNames[pendingName]) then
         return false, L("alreadyListed")
@@ -581,7 +599,8 @@ local function addEnemy(input, reason, fromUnit, kind)
         remember(entry, key, faction, guid)
     end
     addon.RefreshUI()
-    return true, L(pending and "entryAddedPending" or "entryAdded", name)
+    local message = pending and "entryAddedPending" or (guildStatus and "guildAddedPending" or "entryAdded")
+    return true, L(message, name)
 end
 
 local function changeNote(input, reason, kind, selected)
@@ -651,7 +670,7 @@ end
 local function eligibleRecord(key, entry)
     if isPendingEntry(entry) then return false end
     if entry.kind == "G" then
-        return key ~= guildName((GetGuildInfo("player")))
+        return not guildWatchStatus(key, entry.name)
     end
     return isDifferentFaction(entry.faction) and not isAllyName(key)
 end
@@ -754,6 +773,7 @@ addon.PlayerName = playerName
 addon.EntryName = entryName
 addon.RecordKey = recordKey
 addon.IsPendingEntry = isPendingEntry
+addon.GuildWatchStatus = guildWatchStatus
 addon.UnitName = unitName
 addon.EnemyUnit = enemyUnit
 addon.EnemyEntry = enemyEntry
@@ -870,11 +890,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         updateScope()
         addon.RefreshRoster()
         addon.InitMenus()
+        addon.RefreshUI()
         if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
         addon.SeasonRosterReady()
         addon.RefreshStats()
+        addon.RefreshUI()
     elseif event == "PLAYER_LEAVING_WORLD" then
         plates, observedGuilds, deaths, guildAlerts = {}, {}, {}, {}
         addon.CloseAlert()

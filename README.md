@@ -42,6 +42,7 @@ The script migrates data from earlier versions of this project. It copies your l
 - Click **…** in the watchlist to read the full note, author, and last sighting. Import rows and alerts also offer full notes.
 - **Add target** (**Додати ціль**) and **Guild from target** (**Гільдія з цілі**) save the character or guild of your current enemy target and use the note you entered. If you typed a name, the buttons use it. If the target is unavailable, the form prompts for manual entry. You can add a guild by name without targeting a member, except for your own guild. You can also right-click an enemy target or focus portrait to add the character or guild with a note.
 - Starting with 3.3.2, you can type a character's first and last name to add them without a target. If WoW cannot see the character yet, the entry stays pending until the addon can verify an attackable enemy from the opposing faction outside your group and guild. Tracking and sharing start after verification.
+- To add a guild without a target, type its name in the name field and click **Add guild**. If WoW is still loading your own guild name, the entry is saved and becomes available for tracking and sharing once the addon can verify it belongs to a different guild.
 
 | Command | Action |
 | --- | --- |
