@@ -10,6 +10,7 @@ local sending, ticker, sequence = nil, nil, 0
 local incoming = {}
 local published, waiting = {}, {}
 local requestedLists, guildRequests = {}, {}
+local pullInbox, inboxScope = {}, nil
 local lastListRequest
 local requestLifetime = 300
 local requestCooldown = 60
@@ -48,6 +49,104 @@ local function guildScope()
     end
 end
 
+local function inbox()
+    local scope = guildScope()
+    if inboxScope ~= scope then
+        pullInbox, inboxScope = {}, scope
+    end
+    return pullInbox
+end
+
+function addon.InboxCount()
+    local count = 0
+    for sender in pairs(inbox()) do
+        if addon.IsGuildMember(sender) then count = count + 1 end
+    end
+    return count
+end
+
+local function sourceLabel(names)
+    if #names <= 4 then return table.concat(names, ", ") end
+    return table.concat(names, ", ", 1, 4) .. " +" .. (#names - 4)
+end
+
+function addon.PreviewInbox()
+    local scope = guildScope()
+    local replies, senders, combined, notes, sources, existing = {}, {}, {}, {}, {}, {}
+    for key, reply in pairs(inbox()) do
+        if addon.IsGuildMember(key) then
+            replies[key] = reply
+            senders[#senders + 1] = key
+        end
+    end
+    if #senders == 0 then return end
+    table.sort(senders)
+    for _, entry in ipairs(addon.Entries()) do existing[addon.RecordKey(entry)] = entry end
+    for _, sender in ipairs(senders) do
+        local reply = replies[sender]
+        for key, record in pairs(reply.entries) do
+            if not combined[key] then
+                local copy = {}
+                for field, value in pairs(record) do copy[field] = value end
+                combined[key], sources[key], notes[key] = copy, {}, {}
+            end
+            local item = combined[key]
+            item.deaths = math.max(item.deaths, record.deaths)
+            item.high = item.high or record.high
+            sources[key][#sources[key] + 1] = reply.sender
+            local noteSources = notes[key][record.note] or {}
+            noteSources[#noteSources + 1] = reply.sender
+            notes[key][record.note] = noteSources
+        end
+    end
+    for key, item in pairs(combined) do
+        if existing[key] and item.note == existing[key].note then
+            local alternatives = {}
+            for note in pairs(notes[key]) do
+                if note ~= item.note then alternatives[#alternatives + 1] = note end
+            end
+            table.sort(alternatives)
+            item.note = alternatives[1] or item.note
+        end
+    end
+    local added, updated, changes = addon.Merge(combined, true, true)
+    local planned = {}
+    for _, change in ipairs(changes) do
+        local key = change.key
+        local variants = {}
+        for note, authors in pairs(notes[key]) do
+            variants[#variants + 1] = {note = note, authors = sourceLabel(authors)}
+        end
+        if change.previous and not notes[key][change.oldNote] then
+            variants[#variants + 1] = {note = change.oldNote, authors = L("currentNote")}
+        end
+        table.sort(variants, function(left, right) return left.note < right.note end)
+        change.sources = sourceLabel(sources[key])
+        change.variants = variants
+        planned[key] = change
+    end
+    local function accept(selection)
+        if not addon.UpdateScope() or guildScope() ~= scope then
+            addon.Say(L("importSenderLeft"))
+            return
+        end
+        for key in pairs(replies) do
+            if not addon.IsGuildMember(key) then
+                addon.RefreshUI()
+                addon.Say(L("importSenderLeft"))
+                return
+            end
+        end
+        local current = inbox()
+        for key, reply in pairs(replies) do
+            if current[key] == reply then current[key] = nil end
+        end
+        local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, true, planned)
+        addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
+    end
+    return {added = added, updated = updated, changes = changes, removed = 0, accept = accept, replyCount = #senders}
+end
+
 function addon.ReadRoster()
     local scope = guildScope()
     if not scope or not GetGuildRosterInfo or not GetNumGuildMembers then
@@ -61,10 +160,11 @@ function addon.ReadRoster()
     end
     local updated = {}
     for index = 1, count do
-        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(index)
+        local name, _, rank, _, _, _, _, _, online = GetGuildRosterInfo(index)
         local key, full = addon.PlayerName(name, true)
         if key then
-            updated[key] = { name = full, online = addon.Ordinary(online) and online == true }
+            updated[key] = { name = full, online = addon.Ordinary(online) and online == true,
+                leader = addon.Ordinary(rank) and rank == 0 }
         end
     end
     local own = addon.UnitName("player")
@@ -90,6 +190,10 @@ end
 
 function addon.IsGuildMember(key)
     return rosterScope ~= nil and rosterScope == guildScope() and roster[key] ~= nil
+end
+
+function addon.IsGuildLeaderKey(key)
+    return addon.IsGuildMember(key) and roster[key].leader == true
 end
 
 function addon.SuggestRecipients(value)
@@ -415,6 +519,12 @@ local function finish(sender, batch)
     if owner then
         if owner.received[sender] then return end
         owner.received[sender] = true
+        local current = inbox()
+        if not current[sender] or owner.at >= current[sender].at then
+            current[sender] = {sender = roster[sender].name, entries = entries, at = owner.at}
+            addon.RefreshUI()
+        end
+        return
     end
     local function canImport()
         return addon.UpdateScope() and guildScope() == batch.scope and addon.IsGuildMember(sender)
@@ -422,7 +532,6 @@ local function finish(sender, batch)
     addon.OfferImport(roster[sender].name, function()
         if not canImport() then return end
         local added, updated, changes, removed = addon.Merge(entries, true, batch.explicit)
-        if owner and not next(changes or {}) then return end
         local planned = {}
         for _, change in ipairs(changes or {}) do planned[change.key] = change end
         local function accept(selection)
@@ -434,7 +543,7 @@ local function finish(sender, batch)
             addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
         end
         return { added = added, updated = updated, changes = changes or {}, accept = accept, removed = removed }
-    end, owner ~= nil)
+    end)
 end
 
 function addon.Receive(receivedPrefix, message, channel, senderName)

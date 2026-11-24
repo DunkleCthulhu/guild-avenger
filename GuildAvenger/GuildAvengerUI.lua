@@ -3,7 +3,7 @@ local L = addon.Text
 local panel, dialog, review, toast, download, minimapButton, soundWindow
 local statsWindow, commentWindow, settingsWindow
 local offers = {}
-local rowCount, mainRowCount, rowHeight = 7, 6, 51
+local rowCount, mainRowCount, rowHeight = 7, 7, 44
 local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
 local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
@@ -24,6 +24,15 @@ local function fill(parent, tint, inset, depth)
     texture:SetPoint("BOTTOMRIGHT", -inset, inset)
     texture:SetColorTexture(unpack(tint))
     return texture
+end
+
+local function styleRow(row, index)
+    fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+    local rule = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+    rule:SetPoint("BOTTOMLEFT", 0, 1)
+    rule:SetPoint("BOTTOMRIGHT", 0, 1)
+    rule:SetHeight(1)
+    rule:SetColorTexture(0.56, 0.43, 0.25, 0.28)
 end
 
 local function label(parent, font, tint, text)
@@ -90,12 +99,16 @@ local function window(name, width, height, strata)
     return root
 end
 
-local function showComment(text)
+local function showComment(text, title)
     if not commentWindow then
-        local root = window("GuildAvengerComment", 500, 174, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerComment", 500, 200, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(32)
         tinsert(UISpecialFrames, "GuildAvengerComment")
-        label(root, "GameFontNormalLarge", color.gold, L("note")):SetPoint("TOPLEFT", 20, -16)
+        root.title = label(root, "GameFontNormalLarge", color.gold)
+        root.title:SetPoint("TOPLEFT", 20, -16)
+        root.title:SetWidth(460)
+        root.title:SetMaxLines(1)
+        root.title:SetJustifyH("LEFT")
         root.text = label(root, "GameFontHighlight", color.white)
         root.text:SetPoint("TOPLEFT", 20, -47)
         root.text:SetWidth(460)
@@ -105,6 +118,7 @@ local function showComment(text)
         button(root, L("close"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 13)
         commentWindow = root
     end
+    commentWindow.title:SetText(title or L("note"))
     commentWindow.text:SetText(text)
     commentWindow:Show()
 end
@@ -118,7 +132,9 @@ local function commentPreview(parent, text, width, lines, fullText)
     control:SetPoint("TOPLEFT", text, "TOPLEFT")
     control:SetSize(width, lines * 13)
     label(control, "GameFontHighlightSmall", color.gold, "…"):SetPoint("TOPRIGHT", 0, -1)
-    control:SetScript("OnClick", function() showComment(fullText and fullText() or text:GetText()) end)
+    control:SetScript("OnClick", function()
+        if fullText then showComment(fullText()) else showComment(text:GetText()) end
+    end)
     return control
 end
 
@@ -171,7 +187,6 @@ local function renderRows()
             row.check:SetChecked(panel.selected[key] == true)
             row.name:SetText(entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name)
             row.note:SetText(entry.note)
-            row.comment:SetShown(entry.note ~= "")
             row.metadata:SetText(lastSeen(entry) or (entry.pending and L("pendingVerification") or metadata(entry)))
             row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and L("high") or L("normal"))
@@ -219,6 +234,9 @@ function addon.RefreshUI()
     enabled(panel.submit, ready)
     enabled(panel.share, ready and scope ~= "local")
     enabled(panel.pull, ready and scope ~= "local")
+    local replies = addon.InboxCount()
+    enabled(panel.inbox, replies > 0)
+    panel.inbox.label:SetText(L("inboxButton", replies))
     panel.share.label:SetText(selected > 0 and L("shareCount", selected) or L("shareWatchlist"))
     panel.clearSelection:SetShown(selected > 0)
     updateAddLabels()
@@ -563,7 +581,7 @@ local function createPanel()
         row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * rowHeight)
         row:SetPoint("TOPRIGHT", -16, -2 - (index - 1) * rowHeight)
         row:SetHeight(rowHeight - 1)
-        fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+        styleRow(row, index)
         row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
         row.check:SetSize(24, 24)
         row.check:SetPoint("LEFT", 5, 0)
@@ -580,9 +598,13 @@ local function createPanel()
         row.note = label(row, "GameFontHighlightSmall", color.muted)
         row.note:SetPoint("TOPLEFT", 34, -20)
         row.note:SetJustifyH("LEFT")
-        row.comment = commentPreview(row, row.note, 286, 1)
+        row.comment = commentPreview(row, row.note, 286, 1, function()
+            local entry = row.entry
+            local note = entry.note ~= "" and entry.note or L("noNote")
+            return note .. "\n\n" .. metadata(entry) .. "\n" .. (lastSeen(entry) or L("neverSeen")), entry.name
+        end)
         row.metadata = label(row, "GameFontHighlightSmall", color.muted)
-        row.metadata:SetPoint("TOPLEFT", 34, -34)
+        row.metadata:SetPoint("TOPLEFT", 34, -32)
         row.metadata:SetWidth(286)
         row.metadata:SetJustifyH("LEFT")
         row.metadata:SetWordWrap(false)
@@ -645,6 +667,8 @@ local function createPanel()
         status(root.status, addon.RequestWatchlists())
     end)
     root.pull:SetPoint("LEFT", statsButton, "RIGHT", 8, 0)
+    root.inbox = button(root, L("inboxButton", 0), 184, function() addon.OpenPullInbox() end)
+    root.inbox:SetPoint("LEFT", root.pull, "RIGHT", 8, 0)
     root.share = button(root, L("shareWatchlist"), 159, function() addon.PromptShare() end)
     root.share:SetPoint("BOTTOMRIGHT", -20, 18)
     root.clearSelection = button(root, L("clearSelection"), 105, function()
@@ -690,8 +714,12 @@ local statsPageSize = 7
 function addon.RefreshStats()
     if not statsWindow or not statsWindow:IsShown() then return end
     local root = statsWindow
-    local tab = root.selectedTab
-    local rows = addon.StatsRows(tab, root.weekly)
+    local tab = root.view or root.selectedTab
+    local rows = tab == 7 and addon.SeasonTargets() or addon.StatsRows(tab, root.weekly)
+    local season = addon.ActiveSeason()
+    local race = tab == 6 or tab == 7
+    local title = tab == 5 and "honorJournal" or (race and (tab == 7 and "seasonTargets" or "seasonRace") or "statsTitle")
+    root.title:SetText(L(title))
     local pages = math.max(1, math.ceil(#rows / statsPageSize))
     root.page = math.max(1, math.min(root.page, pages))
     for index, row in ipairs(root.rows) do
@@ -707,10 +735,20 @@ function addon.RefreshStats()
             if record.area and record.area ~= "" and record.area ~= place then place = place .. " · " .. record.area end
             if record.x then place = place .. ("  %.1f, %.1f"):format(record.x * 100, record.y * 100) end
             row.detail:SetText(place)
+        elseif record and tab == 5 then
+            row.name:SetText(record.victim or L("honorUnknownVictim"))
+            row.count:SetText("+" .. record.amount)
+            row.detail:SetText(date("%d.%m %H:%M", record.at) .. " · " .. L(record.reason)
+                .. (record.raced and L("honorRaceSuffix") or ""))
+        elseif record and tab == 7 then
+            row.name:SetText(record.kind == "G" and L("guildNameLabel", record.name) or record.name)
+            row.count:SetText("")
+            row.detail:SetText(record.kind == "G" and L("guilds") or L("characters"))
         elseif record then
             row.name:SetText(("%d.  %s"):format(position, record.name))
             row.count:SetText(tostring(record.count))
-            local detail = tab == 2 and "avengerHonor" or (tab == 4 and "avengerKillingBlows" or "enemyKillingBlows")
+            local detail = (tab == 2 or tab == 6) and "avengerHonor"
+                or (tab == 4 and "avengerKillingBlows" or "enemyKillingBlows")
             row.detail:SetText(L(detail))
         end
     end
@@ -724,15 +762,22 @@ function addon.RefreshStats()
     local scope = addon.Scope()
     local inGuild = IsInGuild() and scope ~= nil and scope ~= "local"
     enabled(root.request, inGuild)
+    root.request.label:SetText(L(race and "seasonRefresh" or "refreshRankings"))
     root.share:SetEnabled(inGuild)
+    root.targets:SetShown(race and season ~= nil)
+    root.targets.label:SetText(L(tab == 7 and "seasonRace" or "seasonTargets"))
+    root.seasonInfo:SetShown(race)
+    root.seasonInfo:SetText(season and L("seasonInfo", season.count) or L("seasonWaiting"))
+    root.startSeason:SetShown(race and not season and addon.IsGuildLeaderKey(addon.UnitName("player")))
 end
 
 local function createStats()
-    local root = window("GuildAvengerStats", 540, 532, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerStats", 540, 596, "FULLSCREEN_DIALOG")
     root.page, root.rows, root.Tabs = 1, {}, {}
     root.minTabWidth = 100
     tinsert(UISpecialFrames, "GuildAvengerStats")
-    label(root, "GameFontNormalLarge", color.gold, L("statsTitle")):SetPoint("TOPLEFT", 20, -18)
+    root.title = label(root, "GameFontNormalLarge", color.gold, L("statsTitle"))
+    root.title:SetPoint("TOPLEFT", 20, -18)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", function() root:Hide() end)
@@ -744,7 +789,7 @@ local function createStats()
         tab:SetText(title)
         tab:SetScript("OnClick", function(self)
             PanelTemplates_SetTab(root, self:GetID())
-            root.page = 1
+            root.page, root.view = 1, nil
             addon.RefreshStats()
         end)
     end
@@ -763,7 +808,7 @@ local function createStats()
         row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * 44)
         row:SetPoint("TOPRIGHT", -2, -2 - (index - 1) * 44)
         row:SetHeight(42)
-        fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+        styleRow(row, index)
         row.name = label(row, "GameFontHighlight", color.white)
         row.name:SetPoint("TOPLEFT", 10, -5)
         row.name:SetWidth(326)
@@ -774,7 +819,7 @@ local function createStats()
         row.detail:SetWidth(476)
         row.detail:SetJustifyH("LEFT")
         row.detail:SetMaxLines(1)
-        row.count = label(row, "GameFontHighlight", color.gold)
+        row.count = label(row, "GameFontNormalLarge", color.gold)
         row.count:SetPoint("TOPRIGHT", -10, -6)
         row.add = button(row, L("addFromRankings"), 83, function()
             local ok, message = addon.AddRankedEnemy(row.record.guid)
@@ -799,13 +844,38 @@ local function createStats()
     root.next:SetPoint("TOPLEFT", 149, -407)
     root.share = checkbox(root, 20, -445, L("shareStats"))
     root.share:SetScript("OnClick", function(self) addon.SetStatsSharing(self:GetChecked()) end)
-    root.request = button(root, L("refreshRankings"), 128, function() root.status:SetText(addon.RequestStats()) end)
+    root.request = button(root, L("refreshRankings"), 138, function()
+        if root.view == 6 or root.view == 7 then
+            status(root.status, addon.RequestSeason())
+        else
+            root.status:SetText(addon.RequestStats())
+        end
+    end)
     root.request:SetPoint("TOPRIGHT", -20, -442)
     root.status = label(root, "GameFontHighlightSmall", color.muted, L("statsPrivacy"))
     root.status:SetPoint("BOTTOMLEFT", 20, 23)
     root.status:SetWidth(500)
     root.status:SetJustifyH("LEFT")
     root.status:SetMaxLines(2)
+    local function openView(view)
+        root.view, root.page = view, 1
+        addon.RefreshStats()
+    end
+    local history = button(root, L("honorJournal"), 145, function() openView(5) end)
+    history:SetPoint("TOPLEFT", 20, -480)
+    local race = button(root, L("seasonRace"), 151, function() openView(6) end)
+    race:SetPoint("LEFT", history, "RIGHT", 8, 0)
+    root.targets = button(root, L("seasonTargets"), 150, function()
+        openView(root.view == 7 and 6 or 7)
+    end)
+    root.targets:SetPoint("LEFT", race, "RIGHT", 8, 0)
+    root.seasonInfo = label(root, "GameFontHighlightSmall", color.muted)
+    root.seasonInfo:SetPoint("TOPLEFT", 20, -522)
+    root.seasonInfo:SetWidth(340)
+    root.seasonInfo:SetJustifyH("LEFT")
+    root.seasonInfo:SetMaxLines(2)
+    root.startSeason = button(root, L("seasonStart"), 145, function() addon.PromptSeason() end)
+    root.startSeason:SetPoint("TOPRIGHT", -20, -516)
     return root
 end
 
@@ -1017,6 +1087,24 @@ local function openDialog(options)
     return true
 end
 
+function addon.PromptSeason()
+    local scope = addon.Scope()
+    local selection
+    if panel and panel.scope == scope and next(panel.selected) then
+        selection = {}
+        for key in pairs(panel.selected) do selection[key] = true end
+    end
+    openDialog({
+        title = L("seasonStart"),
+        text = L(selection and "seasonConfirmSelection" or "seasonConfirmAll"),
+        confirm = L("start"),
+        action = function()
+            if not addon.UpdateScope() or addon.Scope() ~= scope then return false, L("guildChanged") end
+            return addon.StartSeason(selection)
+        end,
+    })
+end
+
 confirmBulkRemoval = function()
     local selection, scope = {}, addon.Scope()
     for _, entry in ipairs(addon.Entries()) do
@@ -1127,14 +1215,21 @@ local function renderReview()
             row.priority:SetTextColor(unpack(change.removed and color.red or record.high and color.gold or color.muted))
             local note = record.note ~= "" and record.note or L("noNote")
             row.detail:SetText(change.changedNote and L("proposedNote", note) or note)
-            row.comment:SetShown(record.note ~= "" or change.changedNote == true)
-            row.author:SetText((record.author ~= "" and record.author or L("unknownAuthor"))
+            local choices = change.variants and #change.variants or 0
+            row.variants:SetShown(choices > 1)
+            row.variants.label:SetText(L("noteVariants", choices))
+            row.detail:SetWidth(choices > 1 and 302 or 388)
+            row.comment:SetWidth(choices > 1 and 319 or 405)
+            row.comment:SetShown(record.note ~= "" or change.changedNote == true or change.sources ~= nil)
+            local author = change.sources and L("replyAuthors", change.sources)
+                or (record.author ~= "" and record.author or L("unknownAuthor"))
+            row.author:SetText(author
                 .. (record.deaths > 0 and L("deathCountSuffix", record.deaths) or ""))
         end
     end
     local selected = selectionSize(offer.selected)
     review.count:SetText(L("reviewCount", selected, #offer.changes))
-    enabled(review.confirm, selected > 0)
+    enabled(review.confirm, selected > 0 or (offer.replyCount ~= nil and #offer.changes == 0))
 end
 
 local function selectAll(value, additionsAndCountsOnly)
@@ -1172,7 +1267,7 @@ local function createReview()
         row:SetPoint("TOPLEFT", 2, -2 - (index - 1) * reviewRowHeight)
         row:SetPoint("TOPRIGHT", -17, -2 - (index - 1) * reviewRowHeight)
         row:SetHeight(reviewRowHeight - 1)
-        fill(row, index % 2 == 0 and color.inset or color.panel, 0, 0)
+        styleRow(row, index)
         row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
         row.check:SetSize(26, 26)
         row.check:SetPoint("LEFT", 4, 0)
@@ -1192,13 +1287,41 @@ local function createReview()
         row.detail:SetJustifyH("LEFT")
         row.comment = commentPreview(row, row.detail, 405, 1, function()
             local change = row.change
+            local note = change.record.note
             if change.changedNote then
                 local before = change.oldNote ~= "" and change.oldNote or L("noNote")
-                local after = change.record.note ~= "" and change.record.note or L("noNote")
-                return L("noteChange", before, after)
+                note = L("noteChange", before, note ~= "" and note or L("noNote"))
             end
-            return change.record.note
+            if change.sources then note = note .. "\n\n" .. L("replyAuthors", change.sources) end
+            return note, change.record.name
         end)
+        row.variants = button(row, "", 95, function(self)
+            local change = row.change
+            local function choose(variant)
+                change.record.note = variant.note
+                change.changedNote = change.previous ~= nil and variant.note ~= change.oldNote
+                root.offer.selected[change.key] = true
+                renderReview()
+            end
+            if MenuUtil and MenuUtil.CreateContextMenu then
+                MenuUtil.CreateContextMenu(self, function(_, menu)
+                    for _, variant in ipairs(change.variants) do
+                        local name = variant.note ~= "" and variant.note or L("noNote")
+                        menu:CreateRadio(name .. " · " .. variant.authors,
+                            function(item) return item.note == change.record.note end, choose, variant)
+                    end
+                end)
+            else
+                for index, variant in ipairs(change.variants) do
+                    if variant.note == change.record.note then
+                        choose(change.variants[index % #change.variants + 1])
+                        break
+                    end
+                end
+            end
+        end)
+        row.variants:SetPoint("TOPRIGHT", -7, -23)
+        row.variants:SetHeight(23)
         row.author = label(row, "GameFontHighlightSmall", color.muted)
         row.author:SetPoint("TOPLEFT", 36, -36)
         row.author:SetWidth(405)
@@ -1222,6 +1345,13 @@ local function createReview()
     root.scroll:SetScript("OnValueChanged", renderReview)
     root.count = label(root, "GameFontHighlightSmall", color.muted)
     root.count:SetPoint("TOPLEFT", 18, -470)
+    root.selectNew = button(root, L("selectAllNew"), 145, function()
+        for _, change in ipairs(root.offer.changes) do
+            if change.new then root.offer.selected[change.key] = true end
+        end
+        renderReview()
+    end)
+    root.selectNew:SetPoint("TOPRIGHT", -18, -462)
     button(root, L("selectAll"), 110, function() selectAll(true) end):SetPoint("BOTTOMLEFT", 18, 15)
     button(root, L("clearAll"), 83, function() selectAll(false) end):SetPoint("BOTTOMLEFT", 135, 15)
     root.confirm = button(root, L("accept"), 102, function()
@@ -1245,23 +1375,16 @@ local function createReview()
     return root
 end
 
-presentOffer = function()
-    if (dialog and dialog:IsShown()) or (review and review:IsShown()) then
-        return
-    end
-    local offer
-    while #offers > 0 and not offer do
-        local queued = table.remove(offers, 1)
-        offer = queued.preview()
-        if offer then offer.sender = queued.sender end
-    end
-    if not offer then return end
+local function showReview(offer)
     if not review then review = createReview() end
     table.sort(offer.changes, function(left, right) return left.record.name < right.record.name end)
     offer.selected = {}
     review.offer = offer
-    review.sender:SetText(L("sender", offer.sender))
+    review.sender:SetText(offer.replyCount and L("inboxSenders", offer.replyCount) or L("sender", offer.sender))
     review.summary:SetText(L("reviewSummary", offer.added, offer.updated, offer.removed or 0))
+    review.selectNew:SetShown(offer.replyCount ~= nil)
+    review.confirm.label:SetText(L(offer.replyCount and #offer.changes == 0 and "done" or "accept"))
+    review.cancel.label:SetText(L(offer.replyCount and "close" or "decline"))
     review.empty:SetShown(#offer.changes == 0)
     local maximum = math.max(0, #offer.changes - rowCount)
     review.scroll:SetMinMaxValues(0, maximum)
@@ -1271,18 +1394,28 @@ presentOffer = function()
     review:Show()
 end
 
-function addon.OfferImport(sender, preview, pulled)
-    local directCount = 0
-    local offer = { sender = sender, preview = preview, pulled = pulled }
-    for index, queued in ipairs(offers) do
-        if pulled and queued.pulled and queued.sender == sender then
-            offers[index] = offer
+presentOffer = function()
+    if (dialog and dialog:IsShown()) or (review and review:IsShown()) then return end
+    while #offers > 0 do
+        local queued = table.remove(offers, 1)
+        local offer = queued.preview()
+        if offer then
+            offer.sender = queued.sender
+            showReview(offer)
             return
         end
-        if not queued.pulled then directCount = directCount + 1 end
     end
-    if not pulled and directCount >= 10 then return end
-    offers[#offers + 1] = offer
+end
+
+function addon.OpenPullInbox()
+    if (dialog and dialog:IsShown()) or (review and review:IsShown()) then return end
+    local offer = addon.PreviewInbox()
+    if offer then showReview(offer) end
+end
+
+function addon.OfferImport(sender, preview)
+    if #offers >= 10 then return end
+    offers[#offers + 1] = {sender = sender, preview = preview}
     presentOffer()
 end
 
@@ -1493,13 +1626,15 @@ local function createAlert()
 end
 
 function addon.ShowAlert(entry, preview)
+    if not preview and not entry.high and toast and toast:IsShown() and toast.high then return end
     if not toast then
         toast = createAlert()
     end
     cancelAlertTimer()
-    alertName = not preview and entry.name or nil
+    alertName = not preview and not entry.grouped and entry.name or nil
     portraitUnit = entry.unit
-    toast.portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    toast.high = entry.high
+    toast.portrait:SetTexture(entry.grouped and bookIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
     refreshAlertPortrait()
     toast.name:SetText(entry.name)
     toast:SetBackdropBorderColor(unpack(entry.high and urgentBorder or alertBorder))

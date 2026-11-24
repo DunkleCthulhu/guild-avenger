@@ -4,6 +4,7 @@ local frame = CreateFrame("Frame")
 local listID, entries
 local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
 local observedGuilds = {}
+local guildAlerts = {}
 local cooldown = 30
 local deathCooldown = 8
 local guildObservationLifetime = 120
@@ -140,7 +141,7 @@ local function updateScope()
         importLegacy(entries, legacy, "G")
         GuildAvengerDB.guildsImported[id] = true
     end
-    alerts, deaths, observedGuilds = {}, {}, {}
+    alerts, deaths, observedGuilds, guildAlerts = {}, {}, {}, {}
     for unit in pairs(plates) do
         plates[unit] = false
     end
@@ -259,48 +260,58 @@ local function matchGuild(unit, key, faction, guid)
     local guildKey = guildName((GetGuildInfo(unit)))
     local guild = guildKey and entries[guildKey]
     if guid and guildKey then
-        observedGuilds[guid] = guild and { guild = guildKey, player = key, faction = faction, at = GetTime() } or nil
+        observedGuilds[guid] = { guild = guildKey, player = key, faction = faction, at = GetTime() }
     end
-    return guild
+    return guild, guildKey
 end
 
-function addon.IsHonorTarget(victim)
+function addon.HonorTarget(victim)
     local key = playerName(victim, true)
-    if not key or not entries or isAllyName(key) then return false end
-
+    if not key or not entries or isAllyName(key) then return end
     local personal = entries[key]
-    if personal and not personal.pending and isDifferentFaction(personal.faction) then return true end
+    local function result(guild, verified)
+        local byName = personal and not personal.pending and (verified or isDifferentFaction(personal.faction))
+        local byGuild = guild and entries[guild] ~= nil
+        local reason = byName and (byGuild and "honorBoth" or "honorCharacter") or (byGuild and "honorGuild")
+        return key, guild, reason or nil
+    end
 
-    local function matches(unit)
+    local function guildAt(unit)
         local observed, _, faction, guid = enemyUnit(unit, true)
         if observed == key then
-            return personal ~= nil or matchGuild(unit, key, faction, guid) ~= nil
+            local _, guild = matchGuild(unit, key, faction, guid)
+            return guild or false
         end
     end
     for _, unit in ipairs({ "target", "mouseover", "focus" }) do
-        local match = matches(unit)
-        if match ~= nil then return match end
+        local guild = guildAt(unit)
+        if guild ~= nil then return result(guild or nil, true) end
     end
     for unit in pairs(plates) do
-        local match = matches(unit)
-        if match ~= nil then return match end
+        local guild = guildAt(unit)
+        if guild ~= nil then return result(guild or nil, true) end
     end
     local now = GetTime()
+    local latest
     for _, observation in pairs(observedGuilds) do
         if observation.player == key and now - observation.at <= guildObservationLifetime
-            and entries[observation.guild] and isDifferentFaction(observation.faction) then
-            return true
+            and isDifferentFaction(observation.faction) and (not latest or observation.at > latest.at) then
+            latest = observation
         end
     end
-    return false
+    return result(latest and latest.guild, latest ~= nil)
 end
 
-local function warn(key, entry, player, unit, guid)
+local function startAlert(key)
     local now = GetTime()
     if alerts[key] and now - alerts[key] < cooldown then
-        return
+        return false
     end
     alerts[key] = now
+    return true
+end
+
+local function warn(entry, player, unit, guid)
     local guild = entry.kind == "G" and L("guildNameQuoted", entry.name) or ""
     local reason = entry.note ~= "" and " — " .. entry.note or ""
     local heading = L(entry.high and "highAlert" or "nearbyAlert", player)
@@ -315,8 +326,31 @@ local function warn(key, entry, player, unit, guid)
         kind = entry.kind, high = entry.high, unit = unit })
 end
 
+local function groupGuildAlert(guildKey, entry, player, unit, guid)
+    local burst = guildAlerts[guildKey]
+    if burst and burst.entry == entry then
+        burst.count = burst.count + 1
+        return
+    end
+    burst = { entry = entry, count = 1 }
+    guildAlerts[guildKey] = burst
+    C_Timer.After(1.25, function()
+        if guildAlerts[guildKey] ~= burst then return end
+        guildAlerts[guildKey] = nil
+        if not entries or entries[guildKey] ~= entry then return end
+        if burst.count == 1 then
+            warn(entry, player, unit, guid)
+        else
+            local headline = L("guildAlertCount", burst.count)
+            local note = entry.note ~= "" and headline .. " · " .. entry.note or headline
+            say(L("guildNameQuoted", entry.name) .. " — " .. note)
+            addon.ShowAlert({name = entry.name, note = note, kind = "G", grouped = true})
+        end
+    end)
+end
+
 local function scanUnit(unit, alreadySeen)
-    if not entries or not next(entries) then
+    if not entries or (not next(entries) and not addon.ActiveSeason()) then
         return false
     end
     local key, name, faction, guid = enemyUnit(unit)
@@ -324,7 +358,7 @@ local function scanUnit(unit, alreadySeen)
         return false
     end
     local personal = trackedPlayer(key, name, guid)
-    local guild = matchGuild(unit, key, faction, guid)
+    local guild, guildKey = matchGuild(unit, key, faction, guid)
     local entry = personal or guild
     if not entry then
         return false
@@ -337,8 +371,12 @@ local function scanUnit(unit, alreadySeen)
     local personalSeen = sighting(personal, now, zone)
     local guildSeen = sighting(guild, now, zone)
     if personalSeen or guildSeen then addon.RefreshUI() end
-    if key ~= alreadySeen then
-        warn(key, entry, name, unit, guid)
+    if key ~= alreadySeen and startAlert(key) then
+        if not personal and not entry.high then
+            groupGuildAlert(guildKey, entry, name, unit, guid)
+        else
+            warn(entry, name, unit, guid)
+        end
     end
     return key
 end
@@ -355,7 +393,7 @@ local function scanPlates()
             if now - death.at >= deathCooldown then deaths[guid] = nil end
         end
     end
-    if not entries or not next(entries) then
+    if not entries or (not next(entries) and not addon.ActiveSeason()) then
         return
     end
     for unit, key in pairs(plates) do
@@ -766,6 +804,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GuildAvengerDB.removals = GuildAvengerDB.removals or {}
         addon.InitSync()
         addon.InitStats()
+        addon.InitSeason()
         addon.InitMenus()
         SLASH_GUILDAVENGER1 = "/gavenger"
         SlashCmdList.GUILDAVENGER = slash
@@ -777,9 +816,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
+        addon.SeasonRosterReady()
         addon.RefreshStats()
     elseif event == "PLAYER_LEAVING_WORLD" then
-        plates, observedGuilds, deaths = {}, {}, {}
+        plates, observedGuilds, deaths, guildAlerts = {}, {}, {}, {}
         addon.CloseAlert()
     elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" then
         scanUnit(event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover")
@@ -824,6 +864,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHAT_MSG_ADDON" then
         addon.Receive(...)
         addon.ReceiveStats(...)
+        addon.ReceiveSeason(...)
     elseif event == "ADDON_LOADED" then
         addon.InitMenus()
     end

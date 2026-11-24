@@ -31,9 +31,10 @@ local function ownScore()
     return guild.own[key], scope, key, name
 end
 
-local function currentWeek()
-    return math.floor((GetServerTime() + 3 * 86400) / (7 * 86400))
+local function currentWeek(timestamp)
+    return math.floor(((timestamp or GetServerTime()) + 3 * 86400) / (7 * 86400))
 end
+addon.CurrentWeek = currentWeek
 
 local function weeklyKills(score, week)
     return score.week == week and score.weeklyKills or 0
@@ -45,6 +46,7 @@ end
 
 function addon.InitStats()
     GuildAvengerDB.stats = GuildAvengerDB.stats or { journals = {}, guilds = {} }
+    GuildAvengerDB.stats.honorJournals = GuildAvengerDB.stats.honorJournals or {}
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
 end
 
@@ -71,16 +73,28 @@ function addon.RecordHonor(amount)
     score.honor = math.min(maxCount, (score.honor or 0) + amount)
     score.weeklyHonor = math.min(maxCount, weeklyHonor(score, week) + amount)
     score.honorWeek = week
-    addon.RefreshStats()
     return true
 end
 
-local function journal()
+local function journal(bucket)
     local guid = playerGUID(UnitGUID("player"))
     if not guid then return end
-    local journals = GuildAvengerDB.stats.journals
+    local journals = GuildAvengerDB.stats[bucket or "journals"]
     if not journals[guid] then journals[guid] = {} end
     return journals[guid]
+end
+
+local function rememberEvent(rows, event)
+    table.insert(rows, 1, event)
+    if #rows > journalLimit then table.remove(rows) end
+end
+
+function addon.RecordHonorEvent(victim, amount, reason, raced)
+    local rows = journal("honorJournals")
+    if rows then
+        rememberEvent(rows, { at = GetServerTime(), victim = victim, amount = amount, reason = reason, raced = raced })
+    end
+    addon.RefreshStats()
 end
 
 local function location(entry)
@@ -97,14 +111,14 @@ local function location(entry)
     end
 end
 
-local function lethalHit(when)
+local function lethalHit(when, clock)
     if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return end
     local ok, hits = pcall(C_DeathRecap.GetRecapEvents)
     if not ok or not addon.Ordinary(hits) or type(hits) ~= "table" then return end
     local latest, time
     for _, hit in ipairs(hits) do
         if addon.Ordinary(hit) and type(hit) == "table" and isNumber(hit.overkill) and hit.overkill >= 0
-            and isNumber(hit.timestamp) and math.abs(hit.timestamp - when) <= 5
+            and isNumber(hit.timestamp) and (math.abs(hit.timestamp - when) <= 5 or math.abs(hit.timestamp - clock) <= 5)
             and (not time or hit.timestamp > time) then
             latest, time = hit, hit.timestamp
         end
@@ -112,8 +126,7 @@ local function lethalHit(when)
     return latest
 end
 
-local function identifyKiller(entry, hit, score)
-    local guid = playerGUID(hit.sourceGUID)
+local function identifyKiller(entry, hit, guid, score)
     local name = addon.Clean(hit.sourceName, addon.NameLimit)
     local flags = hit.sourceFlags
     local hostile = guid and isNumber(flags) and bit.band(flags, 0x40) ~= 0
@@ -129,13 +142,11 @@ local function identifyKiller(entry, hit, score)
             end
         end
     end
-    if not name or name == "" then return false end
-    entry.killer = name
-    if score and hostile then
+    entry.killer, entry.killerGUID = (name ~= "" and name or nil), guid
+    if score and hostile and entry.killer then
         local previous = score.enemies[guid]
         score.enemies[guid] = { name = name, count = math.min(maxCount, (previous and previous.count or 0) + 1) }
     end
-    return true
 end
 
 function addon.RecordOwnDeath()
@@ -143,17 +154,18 @@ function addon.RecordOwnDeath()
     local deaths = journal()
     if not deaths then return end
     local entry = { at = GetServerTime() }
+    local clock = GetTime()
     heldDeath, latestDeath = entry, entry
     location(entry)
-    table.insert(deaths, 1, entry)
-    if #deaths > journalLimit then table.remove(deaths) end
-    addon.RefreshStats()
     local score = ownScore()
     local delays = { 0.3, 0.6, 1.1 }
     local function readRecap(attempt)
         if latestDeath ~= entry then return end
-        local hit = lethalHit(entry.at)
-        if hit and identifyKiller(entry, hit, score) then
+        local hit = lethalHit(entry.at, clock)
+        local guid = hit and playerGUID(hit.sourceGUID)
+        if guid and guid ~= playerGUID(UnitGUID("player")) then
+            identifyKiller(entry, hit, guid, score)
+            rememberEvent(deaths, entry)
             addon.RefreshStats()
         elseif attempt < #delays and heldDeath == entry then
             C_Timer.After(delays[attempt + 1], function() readRecap(attempt + 1) end)
@@ -318,7 +330,15 @@ function addon.EnemyScore(guid)
 end
 
 function addon.StatsRows(tab, weekly)
-    if tab == 1 then return journal() or {} end
+    if tab == 1 then
+        local confirmed = {}
+        for _, entry in ipairs(journal() or {}) do
+            if playerGUID(entry.killerGUID) then confirmed[#confirmed + 1] = entry end
+        end
+        return confirmed
+    end
+    if tab == 5 then return journal("honorJournals") or {} end
+    if tab == 6 then return addon.SeasonRows() end
     local rows, enemies = {}, {}
     local week = currentWeek()
     eachScore(function(score, name)

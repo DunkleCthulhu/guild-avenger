@@ -7,7 +7,7 @@ local function literal(text)
     return (text:gsub("(%p)", "%%%1"))
 end
 
-local function killPattern(template, honorArgument)
+local function killPattern(template, honorArgument, named)
     if not addon.IsText(template) or template == "" then return end
     local parts, cursor = { "^" }, 1
     local argument, captures = 0, 0
@@ -35,21 +35,22 @@ local function killPattern(template, honorArgument)
             cursor = marker + #token
         end
     end
-    if not victimCapture or not honorCapture then return end
+    if (named and not victimCapture) or not honorCapture then return end
     parts[#parts + 1] = "$"
     return { pattern = table.concat(parts), victim = victimCapture, honor = honorCapture }
 end
 
 local function honorPatterns()
     local formats = {}
-    local function add(template, honorArgument)
-        local format = killPattern(template, honorArgument)
+    local function add(template, honorArgument, named)
+        local format = killPattern(template, honorArgument, named)
         if format then formats[#formats + 1] = format end
     end
-    add(COMBATLOG_HONORGAIN, 3)
-    add(COMBATLOG_HONORGAIN_NO_RANK, 2)
-    add(COMBATLOG_HONORGAIN_EXHAUSTION1, 3)
-    add(COMBATLOG_HONORGAIN_NO_RANK_EXHAUSTION1, 2)
+    add(COMBATLOG_HONORGAIN, 3, true)
+    add(COMBATLOG_HONORGAIN_NO_RANK, 2, true)
+    add(COMBATLOG_HONORGAIN_EXHAUSTION1, 3, true)
+    add(COMBATLOG_HONORGAIN_NO_RANK_EXHAUSTION1, 2, true)
+    add(COMBATLOG_HONORAWARD, 1, false)
     return formats
 end
 
@@ -62,6 +63,8 @@ local function killAward(message)
             victim = victim:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
             local linkedName = victim:match("^|Hplayer:([^:|]+)[^|]*|h.-|h$")
             return linkedName or victim, honor
+        elseif honor and not format.victim then
+            return nil, honor
         end
     end
 end
@@ -71,8 +74,12 @@ function addon.OnHonorGain(message, lineID)
     local trackLine = addon.Ordinary(lineID) and type(lineID) == "number" and lineID > 0
     if trackLine and recentLines[lineID] then return end
     local victim, honor = killAward(message)
-    if not victim or honor <= 0 or honor > 2147483647 or not addon.IsHonorTarget(victim) then return end
-    if not addon.RecordHonor(honor) or not trackLine then return end
+    if not honor or honor <= 0 or honor > 2147483647 then return end
+    local key, guild, reason = addon.HonorTarget(victim)
+    if reason and not addon.RecordHonor(honor) then reason = "honorNoGuild" end
+    local raced = key and addon.RecordSeasonHonor(key, guild, honor)
+    addon.RecordHonorEvent(victim, honor, reason or (key and "honorNotWatched" or "honorNoTarget"), raced)
+    if not trackLine then return end
     local oldest = lineOrder[nextSlot]
     if oldest then recentLines[oldest] = nil end
     recentLines[lineID], lineOrder[nextSlot] = true, lineID
