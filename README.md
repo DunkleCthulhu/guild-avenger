@@ -30,9 +30,9 @@ The script migrates data from earlier versions of this project. It copies your l
 
 ## Detection and death counts
 
-- Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. The alert shows their portrait, name, note, and high-priority indicator. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
+- Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. Combat events from an enemy you already see as your target, mouseover, focus, or nameplate do not repeat the alert. Targeting the enemy again does. The alert shows their portrait, name, note, and high-priority indicator. If this enemy is in your death journal, the alert starts with how many times they killed you and when they last did. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
 - By default, normal-priority alerts use the raid warning sound and high-priority alerts play a distinct ascending four-note sound. Open `/gavenger` and click **Звуки…** to select and preview built-in WoW sounds for each priority. You can mute character or guild matches separately, or play sounds for high-priority matches only. When a character and their guild both match, the character entry controls the priority, note, and sound settings.
-- The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
+- The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. The alert stays for 12 seconds by default. Choose 6, 12, 20, or 30 seconds in **Settings** (**Налаштування**), where you can also hide the minimap button. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
 - When several enemies from the same guild are spotted together and match only a normal-priority guild entry, they share one alert. A high-priority alert keeps its own portrait and target controls.
 - The **Target** (**У ціль**) and **Danger Ping** (**Пінг небезпеки**) buttons are available outside combat. The ping button appears when the enemy from the alert is your current target and WoW pings are enabled. Click it to send a built-in danger ping on that target.
 - The death counter uses available `PARTY_KILL` and `UNIT_DIED` events and counts duplicate reports of the same death once. A listed guild member's death increases the guild total. If the character also has an individual entry, their counter increases too. WoW must provide a readable identifier, and the addon must recognize the character or guild. Forever reserves `COMBAT_LOG_EVENT_UNFILTERED` for the game client.
@@ -45,6 +45,7 @@ The script migrates data from earlier versions of this project. It copies your l
 - The **All** (**Усі**) tab opens by default. Switch to **Characters** (**Персонажі**) or **Guilds** (**Гільдії**) to narrow the list. **High priority only** (**Лише високий пріоритет**) works in every tab.
 - Search by part of a character name, guild name, or note alongside the other filters. Search ignores letter case, and you can clear it with **×**. Each row shows when and where your addon last saw the target. Hover over the row for the author and date added.
 - **Remove selected** (**Вилучити позначені**) asks for confirmation before removing all selected rows, including selections hidden by a filter or another tab.
+- **Remove** (**Вилучити**) on a single row asks for confirmation too.
 - Click **…** in the watchlist to read the full note, author, and last sighting. Import rows and alerts also offer full notes.
 - **Add target** (**Додати ціль**) and **Guild from target** (**Гільдія з цілі**) save the character or guild of your current enemy target and use the note you entered. If you typed a name, the buttons use it. If the target is unavailable, the form prompts for manual entry. You can add a guild by name without targeting a member, except for your own guild. You can also right-click an enemy target or focus portrait to add the character or guild with a note.
 - Starting with 3.3.2, you can type a character's first and last name to add them without a target. If WoW cannot see the character yet, the entry stays pending until the addon can verify an attackable enemy from the opposing faction outside your group and guild. Tracking and sharing start after verification.
@@ -55,8 +56,10 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger` or `/gavenger ui` | Open or close the watchlist. |
 | `/gavenger list` | List characters and guilds with their priorities in chat. |
 | `/gavenger add "Character Name" Note` | Add an enemy. With no arguments, use the current target. |
+| `/gavenger addtarget Note` | Add the current target with a note. |
 | `/gavenger del Character Name` | Remove a character. With no arguments, use the current target. |
 | `/gavenger guild add` | Add the current enemy target's guild. Use `/gavenger guild add "Guild Name" Note` to enter a guild and note manually. |
+| `/gavenger guild addtarget Note` | Add the current enemy target's guild with a note. |
 | `/gavenger guild del Guild Name` | Remove a guild. |
 | `/gavenger share Character Name` | Offer a list to a guildmate. With no arguments, use the current target. |
 | `/gavenger share guild` | Post a link to the full watchlist in guild chat. |
@@ -66,7 +69,9 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger download` | Open a window with a copyable GitHub link. |
 | `/gavenger help` | Show command help. |
 | `/gavenger stats` | Open the personal death journal and guild rankings. |
-| `/gavenger settings` | Choose the addon language. |
+| `/gavenger settings` | Open the settings: language, alert duration, minimap button. |
+| `/gavenger minimap` | Hide or show the minimap button. |
+| `/gavenger reload` | Reload the UI, like `/reload`. |
 
 ## Sharing watchlists
 
@@ -76,13 +81,26 @@ A guild chat post includes a GitHub link for installing or updating the addon. G
 
 Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Version 3.3.1 keeps the roster’s full address and stops the exchange when a recipient cannot be verified unambiguously. Recipients can select which entries, changes, and removals to accept. When sharing the full list, **Suggest removed entries** (**Запропонувати вилучені записи**) includes entries removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
 
+When the recipient supports it, Guild Avenger packs several entries into one message. When an entry has a higher death count and a proposed note or priority change, the count appears on a separate, preselected row.
+
 **Request guild watchlists** asks online guildmates running 3.2.0 or later for their lists. They can send their list from the chat link or opt in to automatic replies in **Settings**. Replies include current characters, guilds, notes, priorities, and death counts. In 3.3.0, open **Inbox** to review replies together. The same enemy occupies one row with its sources listed. Use **Notes** to choose from differing comments and **Select all new** to mark new entries. Replies that arrive while you are reviewing remain in the inbox.
 
 In 3.3.1, automatic replies are off until you apply permission for the current character and guild. The previous account-wide permission is reset on upgrade. **Cancel** discards settings changes. Applying a change that turns automatic replies off also stops queued replies. Shared records include notes, authors, dates added, and death counts.
 
+## Guild sightings
+
+Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.
+
+- **Report enemies I meet to the guild** sends a hidden addon message to the guild when you get a new alert. It contains the enemy's name, their guild name when the addon can see it, your zone and subzone, and your map coordinates rounded to whole percent. Nothing is sent from dungeons, battlegrounds, or arenas. You report the same enemy at most once a minute, at most one enemy every 5 seconds, and not at all for a minute after a guildmate reported that enemy.
+- **Show guildmates' sightings in my chat** prints a line in your own chat frame, visible only to you. You see sightings only for enemies on your own watchlist or members of guilds on it, with your own note and priority, and at most once a minute per enemy. Reports are accepted only from members of your guild roster.
+- **Also show a popup with sound** shows the alert window for these sightings too.
+- **Share sighting** (**Поділитися зустріччю**) on a local alert posts the enemy and your current location in guild chat when clicked outside an instance.
+
+Guildmates on versions before 3.4.0 neither send nor receive sightings.
+
 ## Statistics
 
-- **My Deaths** (**Мої смерті**) shows up to 100 deaths with a confirmed player killing blow, with time, zone, and coordinates when WoW provides them. If an older entry lacks a verified player ID, it stays in saved data and is omitted from this view.
+- **My Deaths** (**Мої смерті**) shows up to 100 deaths with a confirmed player killing blow, with time, zone, and coordinates when WoW provides them. If an older entry lacks a verified player ID, it stays in saved data and is omitted from this view. A row whose killer was recorded as an enemy player has an **Add to list** (**До книги**) button that adds the killer to the watchlist. Deaths recorded before 3.4.0 have no button.
 - **Avengers** (**Месники**) ranks Honor awarded for kills against each guildmate’s watchlist. Healers and other party members get credit when WoW awards them Honor for the same kill. An enemy on both the character and guild lists counts once. An award has to name a recognizable enemy. For guild-only matches, the addon needs to have seen that enemy’s guild.
 - **Killing blows** (**Останні удари**) keeps the earlier ranking and counts final hits by guildmates or their active pets against watchlist entries. An enemy that matches both a character and a guild entry gives one killing blow in the ranking.
 - **Enemies** (**Вороги**) ranks the enemies with the most confirmed killing blows against guildmates who share their statistics. It groups reports by enemy character ID and keeps the highest reported total from each guildmate.

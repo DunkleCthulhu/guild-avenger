@@ -6,6 +6,8 @@ local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
 local pendingNames = {}
 local observedGuilds = {}
 local guildAlerts = {}
+-- tokens: last alerted enemy per target, mouseover and focus.
+local tokens = {}
 local cooldown = 30
 local deathCooldown = 8
 local guildObservationLifetime = 120
@@ -186,7 +188,7 @@ local function updateScope()
         importLegacy(entries, legacy, "G")
         GuildAvengerDB.guildsImported[id] = true
     end
-    alerts, deaths, observedGuilds, guildAlerts = {}, {}, {}, {}
+    alerts, deaths, observedGuilds, guildAlerts, tokens = {}, {}, {}, {}, {}
     for unit in pairs(plates) do
         plates[unit] = false
     end
@@ -396,8 +398,23 @@ local function warn(entry, player, unit, guid)
         local score = L("guildmateKills", count)
         note = note ~= "" and (score .. " · " .. note) or score
     end
-    addon.ShowAlert({ name = player, note = note,
+    -- The player's own history with this enemy goes first, where the two-line alert always shows it.
+    local killed, last = addon.KillerHistory(guid, player)
+    if killed > 0 then
+        local history = L("killedYou", killed, date("%d.%m %H:%M", last))
+        note = note ~= "" and (history .. " · " .. note) or history
+    end
+    addon.ShowAlert({ name = player, note = note, guild = entry.kind == "G" and entry.name or nil,
         kind = entry.kind, high = entry.high, unit = unit })
+end
+
+-- The player's own entry for an enemy that a guildmate reported: the character, or the named guild.
+function addon.ListedEntry(key, guild)
+    if not entries or not key or isAllyName(key) then return end
+    local personal = entries[key]
+    if personal and not isPendingEntry(personal) and isDifferentFaction(personal.faction) then return personal end
+    local guildKey = guild and guildName(guild)
+    return watchedGuild(guildKey)
 end
 
 local function groupGuildAlert(guildKey, entry, player, unit, guid)
@@ -443,6 +460,10 @@ local function scanUnit(unit, alreadySeen)
     local guildSeen = sighting(guild, now, zone)
     if personalSeen or guildSeen then addon.RefreshUI() end
     if key ~= alreadySeen and startAlert(key) then
+        -- Every new alert may be reported to the guild, whether it is shown alone or in a group.
+        -- The enemy's guild lets guildmates who list only that guild see the report.
+        local enemyGuild = entry.kind == "G" and entry.name or clean((GetGuildInfo(unit)), nameLimit)
+        addon.ReportSighting(key, entry, name, enemyGuild ~= "" and enemyGuild or nil)
         if not personal and not entry.high then
             groupGuildAlert(guildKey, entry, name, unit, guid)
         else
@@ -675,26 +696,39 @@ local function eligibleRecord(key, entry)
     return isDifferentFaction(entry.faction) and not isAllyName(key)
 end
 
-function addon.AddRankedEnemy(guid)
-    if not updateScope() then return false, L("guildLoading") end
-    local enemy = addon.RankedEnemy(guid)
-    if not enemy then return false, L("rankedEntryMissing") end
+-- Adds an enemy known by character ID. If WoW cannot see them now, the entry waits for the next encounter.
+local function addByGUID(guid, enemyName, note)
     local pendingKey = "pending:" .. guid:upper()
-    local nameKey = enemy.name:find(" ", 1, true) and playerName(enemy.name)
+    local nameKey = enemyName:find(" ", 1, true) and playerName(enemyName)
     if nameKey and isAllyName(nameKey) then return false, L("invalidEnemy") end
     if entries[pendingKey] or knownGUIDs[guid] or (nameKey and entries[nameKey]) then
         return false, L("enemyAlreadyListed")
     end
-    local note = L("rankedEnemyNote")
     local unit = UnitTokenFromGUID and UnitTokenFromGUID(guid)
     local key, name = enemyUnit(unit)
     if key then return addEnemy(name, note, unit) end
     local _, author = unitName("player")
-    entries[pendingKey] = { name = enemy.name, note = note, author = author or "", addedAt = GetServerTime(),
+    entries[pendingKey] = { name = enemyName, note = note, author = author or "", addedAt = GetServerTime(),
         kind = "P", deaths = 0, guid = guid, pending = true }
     if nameKey then removalLog()[nameKey] = nil end
     addon.RefreshUI()
-    return true, L("rankedEnemyAdded", enemy.name)
+    return true, L("rankedEnemyAdded", enemyName)
+end
+
+function addon.AddRankedEnemy(guid)
+    if not updateScope() then return false, L("guildLoading") end
+    local enemy = addon.RankedEnemy(guid)
+    if not enemy then return false, L("rankedEntryMissing") end
+    return addByGUID(guid, enemy.name, L("rankedEnemyNote"))
+end
+
+-- The killer from a My Deaths journal row.
+function addon.AddKiller(guid, name)
+    if not updateScope() then return false, L("guildLoading") end
+    if not isText(guid) or not guid:match("^Player%-%d+%-%x+$") or not isText(name) or name == "" then
+        return false, L("rankedEntryMissing")
+    end
+    return addByGUID(guid, name, L("killerNote"))
 end
 
 function addon.RemovalProposals()
@@ -714,9 +748,13 @@ local function mergeEntries(incoming, preview, explicit, planned)
         return 0, 0
     end
     local added, updated, changes, removed = 0, 0, {}, 0
+    local touched = {}
     for key, record in pairs(incoming) do
-        local previous = entries[key]
         local plan = planned and planned[key]
+        -- A count row is reviewed apart from the note or priority row of the same entry.
+        local countOnly = plan and plan.countOnly
+        if countOnly then key = plan.entry end
+        local previous = entries[key]
         local same = not plan or (plan.previous == previous and (not previous or
             (previous.note == plan.oldNote and (previous.high == true) == plan.oldHigh)))
         if record.removed and explicit and previous and same then
@@ -737,18 +775,30 @@ local function mergeEntries(incoming, preview, explicit, planned)
                     removalLog()[key] = nil
                 end
             elseif previous then
-                local moreDeaths = record.deaths > previous.deaths
+                local moreDeaths = record.deaths > previous.deaths and not (plan and plan.split)
                 local higherPriority = record.high == true and not previous.high
-                local changedNote = explicit and same and record.note ~= previous.note
-                local changedPriority = explicit and same and (record.high == true) ~= (previous.high == true)
+                local changedNote = explicit and same and not countOnly and record.note ~= previous.note
+                local changedPriority = explicit and same and not countOnly
+                    and (record.high == true) ~= (previous.high == true)
                 if moreDeaths or (not explicit and higherPriority) or changedNote or changedPriority then
-                    updated = updated + 1
+                    if not touched[key] then
+                        touched[key] = true
+                        updated = updated + 1
+                    end
                     if preview then
-                        changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths,
+                        local split = moreDeaths and (changedNote or changedPriority)
+                        if split then
+                            -- A tab cannot appear in a name, so this key never collides with an entry.
+                            changes[#changes + 1] = { key = key .. "\tdeaths", entry = key, record = record,
+                                moreDeaths = true, countOnly = true, previous = previous,
+                                oldNote = previous.note, oldHigh = previous.high == true }
+                        end
+                        changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths and not split,
+                            split = split or nil,
                             higherPriority = higherPriority, changedNote = changedNote, changedPriority = changedPriority,
                             previous = previous, oldNote = previous.note, oldHigh = previous.high == true }
                     else
-                        previous.deaths = math.max(previous.deaths, record.deaths)
+                        if moreDeaths then previous.deaths = record.deaths end
                         if changedNote then previous.note = record.note end
                         if changedPriority then previous.high = record.high == true and true or nil end
                         if not explicit and higherPriority then previous.high = true end
@@ -824,11 +874,16 @@ local function slash(input)
         showHelp()
     elseif command == "add" then
         _, message = addEnemy(splitAdd(rest))
+    elseif command == "addtarget" then
+        -- "add" reads any text as a name, so the target takes a note through its own command.
+        _, message = addEnemy("", rest)
     elseif command == "guild" then
         local operation, guild = rest:match("^(%S+)%s*(.*)$")
         if operation == "add" then
             local name, note = guild:match('^"([^"]+)"%s*(.*)$')
             _, message = addEnemy(name or guild, note or "", nil, "G")
+        elseif operation == "addtarget" then
+            _, message = addEnemy("", guild, nil, "G")
         elseif operation == "del" or operation == "remove" then
             _, message = deleteEnemy(guild, "G")
         else
@@ -855,6 +910,15 @@ local function slash(input)
         addon.OpenStats()
     elseif command == "settings" then
         addon.PromptSettings()
+    elseif command == "minimap" then
+        message = addon.ToggleMinimap()
+    elseif command == "reload" then
+        -- WoW refuses a reload from an addon button but allows it from a typed command.
+        if InCombatLockdown() then
+            message = L("reloadAfterCombat")
+        else
+            C_UI.Reload()
+        end
     elseif command == "list" then
         local list = sortedEntries()
         say(#list == 0 and L("emptyListChat") or L("entryCountChat", #list))
@@ -882,6 +946,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.InitSync()
         addon.InitStats()
         addon.InitSeason()
+        addon.InitSightings()
         addon.InitMenus()
         SLASH_GUILDAVENGER1 = "/gavenger"
         SlashCmdList.GUILDAVENGER = slash
@@ -900,10 +965,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.RefreshUI()
         addon.RefreshSettingsGuild()
     elseif event == "PLAYER_LEAVING_WORLD" then
-        plates, observedGuilds, deaths, guildAlerts = {}, {}, {}, {}
+        plates, observedGuilds, deaths, guildAlerts, tokens = {}, {}, {}, {}, {}
         addon.CloseAlert()
-    elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" then
-        scanUnit(event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover")
+    elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" or event == "PLAYER_FOCUS_CHANGED" then
+        local unit = event == "PLAYER_TARGET_CHANGED" and "target"
+            or event == "PLAYER_FOCUS_CHANGED" and "focus" or "mouseover"
+        tokens[unit] = scanUnit(unit)
     elseif event == "NAME_PLATE_UNIT_ADDED" or event == "NAME_PLATE_UNIT_REMOVED" then
         local unit = ...
         if isText(unit) then
@@ -927,8 +994,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.ResetOwnDeath()
     elseif event == "UNIT_COMBAT" then
         local unit = ...
-        if isText(unit) and (unit == "target" or unit == "mouseover" or unit == "focus" or plates[unit] ~= nil) then
-            scanUnit(unit)
+        -- Combat events repeat through a fight, so an enemy already announced on this unit stays quiet.
+        if isText(unit) then
+            if plates[unit] ~= nil then
+                plates[unit] = scanUnit(unit, plates[unit])
+            elseif unit == "target" or unit == "mouseover" or unit == "focus" then
+                tokens[unit] = scanUnit(unit, tokens[unit])
+            end
         end
     elseif event == "UNIT_HEALTH" then
         local unit = ...
@@ -946,6 +1018,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.Receive(...)
         addon.ReceiveStats(...)
         addon.ReceiveSeason(...)
+        addon.ReceiveSighting(...)
     elseif event == "ADDON_LOADED" then
         addon.InitMenus()
     end
@@ -956,6 +1029,7 @@ for _, event in ipairs({
     "INITIAL_CLUBS_LOADED", "GUILD_ROSTER_UPDATE", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_COMBAT", "UNIT_DIED", "PARTY_KILL",
     "UNIT_HEALTH", "CHAT_MSG_ADDON", "CHAT_MSG_COMBAT_HONOR_GAIN", "PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST",
+    "PLAYER_FOCUS_CHANGED",
 }) do
     frame:RegisterEvent(event)
 end

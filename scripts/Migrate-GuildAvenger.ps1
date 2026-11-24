@@ -6,6 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $client = (Resolve-Path -LiteralPath $ClientRoot).ProviderPath
+# Resolve-Path keeps a trailing separator, which breaks the path comparisons below. A drive root keeps its own.
+if ($client -ne [IO.Path]::GetPathRoot($client)) { $client = $client.TrimEnd('\', '/') }
 $addonsPath = Join-Path $client 'Interface/AddOns'
 $addons = (Resolve-Path -LiteralPath $addonsPath).ProviderPath
 if ($addons -ne [IO.Path]::GetFullPath($addonsPath)) {

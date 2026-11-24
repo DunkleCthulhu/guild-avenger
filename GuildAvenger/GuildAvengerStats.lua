@@ -98,6 +98,28 @@ function addon.RecordHonorEvent(victim, amount, reason, raced)
     addon.RefreshStats()
 end
 
+-- How often this enemy killed the player and when last, from the death journal. The character ID
+-- decides when both sides have one; journal entries without it match by full name.
+function addon.KillerHistory(guid, name)
+    local deaths = journal()
+    guid = playerGUID(guid)
+    local wanted = addon.IsText(name) and addon.LowerName(name)
+    local count, last = 0, nil
+    for _, entry in ipairs(deaths or {}) do
+        local same
+        if guid and entry.killerGUID then
+            same = entry.killerGUID == guid
+        else
+            same = wanted and addon.IsText(entry.killer) and addon.LowerName(entry.killer) == wanted
+        end
+        if same then
+            count = count + 1
+            if not last or entry.at > last then last = entry.at end
+        end
+    end
+    return count, last
+end
+
 local function location(entry)
     entry.zone = addon.Clean(GetRealZoneText(), 140)
     entry.area = addon.Clean(GetSubZoneText(), 140)
@@ -111,6 +133,8 @@ local function location(entry)
         entry.x, entry.y = x, y
     end
 end
+
+addon.Location = location
 
 local function lethalHit(when, clock)
     if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return end
@@ -144,6 +168,8 @@ local function identifyKiller(entry, hit, guid, score)
         end
     end
     entry.killer, entry.killerGUID = (name ~= "" and name or nil), guid
+    -- An enemy player: the journal row can offer to add this killer to the watchlist.
+    entry.killerHostile = hostile and true or nil
     if score and hostile and entry.killer then
         local previous = score.enemies[guid]
         score.enemies[guid] = { name = name, count = math.min(maxCount, (previous and previous.count or 0) + 1) }

@@ -15,6 +15,9 @@ local lastListRequest
 local requestLifetime = 300
 local requestCooldown = 60
 local autoReplyRevision = 0
+local packetLimit = 240
+local capabilities = "M"
+local capable, announced, probing = {}, {}, {}
 local makePackets, enqueue, currentMember
 
 local function transferID()
@@ -31,8 +34,26 @@ end
 
 local installedRank = versionRank(version) or 0
 
-local function installMessage(release, language)
+local function installMessage(release, language, short)
+    if short then
+        return addon.TextFor(language, "installMessageShort", release, downloadURL)
+    end
     return addon.TextFor(language, "installMessage", release, downloadURL, addon.TextFor(language, "projectInfo"))
+end
+
+-- A chat message holds 255 bytes, and the Ukrainian text is close to that.
+local function fittingInstallMessage(release, language)
+    local message = installMessage(release, language)
+    return #message <= 255 and message or installMessage(release, language, true)
+end
+
+local function isInstallMessage(message, release)
+    for _, language in ipairs({ "ukUA", "enUS" }) do
+        if message == installMessage(release, language) or message == installMessage(release, language, true) then
+            return true
+        end
+    end
+    return false
 end
 
 local function downloadLink()
@@ -109,18 +130,21 @@ function addon.PreviewInbox()
     local added, updated, changes = addon.Merge(combined, true, true)
     local planned = {}
     for _, change in ipairs(changes) do
-        local key = change.key
-        local variants = {}
-        for note, authors in pairs(notes[key]) do
-            variants[#variants + 1] = {note = note, authors = sourceLabel(authors)}
+        -- A death count row has its own key and names its entry. It offers no note to choose.
+        local key = change.entry or change.key
+        if not change.countOnly then
+            local variants = {}
+            for note, authors in pairs(notes[key]) do
+                variants[#variants + 1] = {note = note, authors = sourceLabel(authors)}
+            end
+            if change.previous and not notes[key][change.oldNote] then
+                variants[#variants + 1] = {note = change.oldNote, authors = L("currentNote")}
+            end
+            table.sort(variants, function(left, right) return left.note < right.note end)
+            change.variants = variants
         end
-        if change.previous and not notes[key][change.oldNote] then
-            variants[#variants + 1] = {note = change.oldNote, authors = L("currentNote")}
-        end
-        table.sort(variants, function(left, right) return left.note < right.note end)
         change.sources = sourceLabel(sources[key])
-        change.variants = variants
-        planned[key] = change
+        planned[change.key] = change
     end
     local function accept(selection)
         if not addon.UpdateScope() or guildScope() ~= scope then
@@ -194,6 +218,7 @@ function addon.RefreshRoster()
     local scope = guildScope()
     if scope ~= rosterScope then
         roster, rosterScope, incoming = {}, nil, {}
+        capable, announced, probing = {}, {}, {}
         rosterRequestedAt = nil
     end
     if scope and (not rosterRequestedAt or GetTime() - rosterRequestedAt >= 5) then
@@ -333,7 +358,7 @@ local function sendNext()
         stopSending(L("watchlistTransferRevoked"))
         return
     end
-    local result = C_ChatInfo.SendAddonMessage(prefix, transfer.packets[sending.position], "WHISPER", member.address)
+    local result = C_ChatInfo.SendAddonMessage(prefix, sending.packets[sending.position], "WHISPER", member.address)
     if result == results.AddonMessageThrottle or result == results.ChannelThrottle
         or result == results.AddOnMessageLockdown then
         if GetTime() - sending.progressAt > 45 then
@@ -347,7 +372,7 @@ local function sendNext()
     end
     sending.position = sending.position + 1
     sending.progressAt = GetTime()
-    if sending.position > #transfer.packets then
+    if sending.position > #sending.packets then
         stopSending(L("transferDone", member.name))
     end
 end
@@ -393,8 +418,27 @@ local function recipient(input)
     return exact
 end
 
+local function finishProbe(id, probe, packed)
+    if probing[id] ~= probe then return end
+    probing[id] = nil
+    if probe.scope ~= guildScope() or not currentMember(probe.key, probe.identity) then return end
+    enqueue(probe.key, probe.transfer, nil, probe.revision, packed)
+end
+
+local function startTransfer(key, transfer, revision)
+    local scope, member = guildScope(), guildMember(key)
+    local current = scope and member and currentMember(key, member.identity)
+    if not current or not current.online or (sending and #waiting >= 20) then return false end
+    local id = transfer.id
+    local probe = { key = key, scope = scope, identity = current.identity, transfer = transfer, revision = revision }
+    probing[id] = probe
+    C_ChatInfo.SendAddonMessage(prefix, "A\t" .. id, "WHISPER", current.address)
+    C_Timer.After(2, function() finishProbe(id, probe, false) end)
+    return true
+end
+
 function addon.Share(input, selection, includeRemovals)
-    if sending then
+    if sending or next(probing) then
         return false, L("transferInProgress")
     end
     if not addon.UpdateScope() or not guildScope() then
@@ -416,7 +460,7 @@ function addon.Share(input, selection, includeRemovals)
     if not transfer then
         return false, message
     end
-    if not enqueue(key, transfer) then return false, L("recipientLeftRoster") end
+    if not startTransfer(key, transfer) then return false, L("recipientLeftRoster") end
     return true, L("transferStarted", member.name)
 end
 
@@ -447,23 +491,47 @@ makePackets = function(selection, includeRemovals, pullID)
             packets[#packets + 1] = ("X\t%s\t%s\t%s"):format(id, entry.kind, entry.name)
         end
     end
+    -- The packed form puts several records, seven fields each, into one M message.
+    local packed = {}
+    for index, packet in ipairs(packets) do packed[index] = packet end
+    local header = ("M\t%s"):format(id)
+    local current = header
+    local function flush()
+        if current ~= header then
+            packed[#packed + 1] = current
+            current = header
+        end
+    end
     for index, entry in ipairs(entries) do
         local faction = entry.kind == "G" and "G" or (entry.faction == "Alliance" and "A" or "H")
-        packets[#packets + 1] = ("R\t%s\t%d\t%s\t%d\t%d\t%s"):format(id, index, faction,
-            entry.addedAt, entry.deaths, entry.name)
+        local base = { ("R\t%s\t%d\t%s\t%d\t%d\t%s"):format(id, index, faction,
+            entry.addedAt, entry.deaths, entry.name) }
         -- Existing 2.0 clients ignore the optional priority packet.
         if entry.high then
-            packets[#packets + 1] = ("H\t%s\t%d\t1"):format(id, index)
+            base[#base + 1] = ("H\t%s\t%d\t1"):format(id, index)
         end
-        packets[#packets + 1] = ("N\t%s\t%d\t%s\t%s"):format(id, index, entry.author, entry.note)
+        base[#base + 1] = ("N\t%s\t%d\t%s\t%s"):format(id, index, entry.author, entry.note)
+        for _, packet in ipairs(base) do packets[#packets + 1] = packet end
+        local record = ("\t%d\t%s%d\t%d\t%d\t%s\t%s\t%s"):format(index, faction, entry.high and 1 or 0,
+            entry.addedAt, entry.deaths, entry.name, entry.author, entry.note)
+        if #header + #record > packetLimit then
+            -- A record too long for one message travels in the base format.
+            flush()
+            for _, packet in ipairs(base) do packed[#packed + 1] = packet end
+        else
+            if #current + #record > packetLimit then flush() end
+            current = current .. record
+        end
     end
-    return {packets = packets, id = id, records = guards}
+    flush()
+    return {packets = packets, packed = packed, id = id, records = guards}
 end
 
-enqueue = function(key, transfer, offer, revision)
+enqueue = function(key, transfer, offer, revision, packed)
     local member = guildMember(key)
     if not member or not currentMember(key, member.identity) then return false end
     local job = {scope = guildScope(), key = key, identity = member.identity, position = 1, transfer = transfer,
+        packets = packed and transfer.packed or transfer.packets,
         progressAt = GetTime(), quiet = offer ~= nil, offer = offer, autoRevision = revision}
     if sending then
         if #waiting >= 20 then return false end
@@ -505,7 +573,7 @@ local function replyToListRequest(sender, id, revision)
     if request.sent then return false, L("listRequestAlreadySent") end
     local transfer, errorMessage = makePackets(nil, false, id)
     if not transfer then return false, errorMessage end
-    if not enqueue(sender, transfer, nil, revision) then return false, L("transferInProgress") end
+    if not startTransfer(sender, transfer, revision) then return false, L("transferInProgress") end
     request.sent = true
     return true, L("transferStarted", member.name)
 end
@@ -553,7 +621,7 @@ function addon.Publish(selection, includeRemovals)
     local id = transfer.id
     published[id] = {id = id, transfer = transfer, at = GetTime(), scope = guildScope(), requested = {}}
     C_ChatInfo.SendChatMessage("[Guild Avenger " .. id .. "]", "GUILD")
-    C_ChatInfo.SendChatMessage(installMessage(version, addon.Language()), "GUILD")
+    C_ChatInfo.SendChatMessage(fittingInstallMessage(version, addon.Language()), "GUILD")
     return true, L("listPublished")
 end
 
@@ -564,7 +632,7 @@ local function chatFilter(_, _, message, sender, ...)
     local release = message:match("^Guild Avenger v([%d.]+)%. ")
     local availableRank = release and versionRank(release)
     -- Plain guild chat uses the sender's language. Addon links use the reader's language.
-    if availableRank and (message == installMessage(release, "ukUA") or message == installMessage(release, "enUS")) then
+    if availableRank and isInstallMessage(message, release) then
         if availableRank <= installedRank then
             return true
         end
@@ -610,6 +678,7 @@ local function requestLink(_, link, _, mouseButton)
         addon.Say(L("shareAuthorOffline"))
         return
     end
+    C_ChatInfo.SendAddonMessage(prefix, ("C\t%s\t%s"):format(id, capabilities), "WHISPER", member.address)
     local result = C_ChatInfo.SendAddonMessage(prefix, "Q\t" .. id, "WHISPER", member.address)
     if result == results.Success then
         addon.Say(L("shareRequestSent"))
@@ -663,6 +732,33 @@ local function finish(sender, batch)
     end)
 end
 
+local function readRecord(record, faction, addedAt, deaths, name)
+    local kind = faction == "G" and "G" or "P"
+    local key, full = addon.EntryName(name, kind)
+    addedAt, deaths = tonumber(addedAt), tonumber(deaths)
+    if not key or not addedAt or addedAt > 4294967295 or not deaths or deaths > 2147483647 then
+        return false
+    end
+    record.key, record.name, record.kind = key, full, kind
+    record.faction = kind == "P" and (faction == "A" and "Alliance" or "Horde") or nil
+    record.addedAt, record.deaths = addedAt, deaths
+    return true
+end
+
+local function readNote(record, author, note)
+    note = addon.Clean(note, addon.NoteLimit)
+    local full
+    if author and author ~= "" then
+        local _
+        _, full = addon.PlayerName(author)
+    end
+    if note == nil or (author ~= "" and not full) then
+        return false
+    end
+    record.author, record.note = full or "", note
+    return true
+end
+
 function addon.Receive(receivedPrefix, message, channel, senderName)
     if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix or not addon.IsText(channel)
         or (channel ~= "WHISPER" and channel ~= "GUILD")
@@ -683,11 +779,39 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         local offer, now = published[requestID], GetTime()
         if activeOffer(offer)
             and (not offer.requested[sender] or now - offer.requested[sender] >= 10) then
-            if enqueue(sender, offer.transfer, offer) then offer.requested[sender] = now end
+            local peer = capable[sender]
+            local packed = peer and peer.id == requestID and peer.identity == identity
+                and peer.scope == offer.scope and now - peer.at < 30
+            if enqueue(sender, offer.transfer, offer, nil, packed) then offer.requested[sender] = now end
         end
         return
     end
-    local operation, id, data = message:match("^([BRNHVDX])\t([%da-f]+%.[%da-f]+)\t(.*)$")
+    -- Guild messages returned above, so the question A and the answer C count only as whispers.
+    local probeID = message:match("^A\t([%da-f]+%.[%da-f]+)$")
+    if probeID then
+        -- A sender asks what this client reads before it starts a transfer.
+        local now = GetTime()
+        if #probeID <= 16 and (not announced[sender] or now - announced[sender] >= 2) then
+            announced[sender] = now
+            C_ChatInfo.SendAddonMessage(prefix, ("C\t%s\t%s"):format(probeID, capabilities), "WHISPER",
+                roster[sender].address)
+        end
+        return
+    end
+    local capableID, flags = message:match("^C\t([%da-f]+%.[%da-f]+)\t(%a+)$")
+    if capableID then
+        if #capableID <= 16 and flags:find("M", 1, true) then
+            local probe = probing[capableID]
+            if probe and probe.key == sender and probe.identity == identity then
+                finishProbe(capableID, probe, true)
+            elseif activeOffer(published[capableID]) then
+                capable[sender] = {id = capableID, identity = identity, scope = guildScope(), at = GetTime()}
+            end
+        end
+        return
+    end
+    -- P is the guild-wide watchlist request above, so packed records travel as M.
+    local operation, id, data = message:match("^([BRNHVDXM])\t([%da-f]+%.[%da-f]+)\t(.*)$")
     if not operation or #id > 16 then
         return
     end
@@ -744,6 +868,29 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         batch.progressAt = now
         if batch.ready == batch.count and batch.removalCount == batch.expectedRemovals then finish(sender, batch) end
         return
+    elseif operation == "M" then
+        -- Several whole records in one message, seven fields each.
+        -- Every field counts, including an empty note at the very end of the message.
+        local fields = {}
+        for field in (data .. "\t"):gmatch("([^\t]*)\t") do fields[#fields + 1] = field end
+        if #fields % 7 ~= 0 then return end
+        for offset = 1, #fields, 7 do
+            local index = fields[offset]:match("^%d+$") and tonumber(fields[offset])
+            local faction, high = fields[offset + 1]:match("^([AHG])([01])$")
+            local record = {}
+            if index and index >= 1 and index <= batch.count and not batch.records[index] and faction
+                and fields[offset + 2]:match("^%d+$") and fields[offset + 3]:match("^%d+$")
+                and readRecord(record, faction, fields[offset + 2], fields[offset + 3], fields[offset + 4])
+                and readNote(record, fields[offset + 5], fields[offset + 6]) then
+                record.high = high == "1" or nil
+                batch.records[index], batch.progressAt = record, now
+                batch.ready = batch.ready + 1
+            end
+        end
+        if batch.ready == batch.count and batch.removalCount == (batch.expectedRemovals or 0) then
+            finish(sender, batch)
+        end
+        return
     end
     local indexText, fields = data:match("^(%d+)\t(.*)$")
     local index = tonumber(indexText)
@@ -753,29 +900,16 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     local record = batch.records[index] or {}
     if operation == "R" and not record.key then
         local faction, addedAt, deaths, name = fields:match("^([AHG])\t(%d+)\t(%d+)\t([^\t]+)$")
-        local kind = faction == "G" and "G" or "P"
-        local key, full = addon.EntryName(name, kind)
-        addedAt, deaths = tonumber(addedAt), tonumber(deaths)
-        if not key or not addedAt or addedAt > 4294967295 or not deaths or deaths > 2147483647 then
+        if not readRecord(record, faction, addedAt, deaths, name) then
             return
         end
-        record.key, record.name, record.kind = key, full, kind
-        record.faction = kind == "P" and (faction == "A" and "Alliance" or "Horde") or nil
-        record.addedAt, record.deaths = addedAt, deaths
     elseif operation == "H" and record.key and record.note == nil and fields == "1" then
         record.high = true
     elseif operation == "N" and record.note == nil then
         local author, note = fields:match("^([^\t]*)\t([^\t]*)$")
-        note = addon.Clean(note, addon.NoteLimit)
-        local full
-        if author ~= "" then
-            local _
-            _, full = addon.PlayerName(author)
-        end
-        if note == nil or (author ~= "" and not full) then
+        if not readNote(record, author, note) then
             return
         end
-        record.author, record.note = full or "", note
     else
         return
     end

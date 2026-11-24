@@ -326,7 +326,7 @@ local function submit()
     finishForm(ok, message, name, kind)
 end
 
-local submitGuild, confirmBulkRemoval
+local submitGuild, confirmBulkRemoval, confirmRemoval
 
 local function checkbox(parent, x, y, title)
     local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
@@ -406,6 +406,15 @@ function addon.PromptSounds()
     soundWindow:Show()
 end
 
+local alertDurations = { 6, 12, 20, 30 }
+
+local function alertDuration()
+    for _, seconds in ipairs(alertDurations) do
+        if GuildAvengerDB.alertDuration == seconds then return seconds end
+    end
+    return 12
+end
+
 function addon.RefreshSettingsGuild()
     if settingsWindow and settingsWindow:IsShown() then
         settingsWindow.RefreshGuild()
@@ -414,7 +423,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 389, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 563, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -446,21 +455,50 @@ function addon.PromptSettings()
         guildMessage:SetPoint("TOPRIGHT", -20, -254)
         guildMessage:SetJustifyH("LEFT")
         guildMessage:SetMaxLines(2)
+        label(root, "GameFontHighlight", color.white, L("alertDuration")):SetPoint("TOPLEFT", 20, -292)
+        local duration = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
+        duration:SetPoint("TOPRIGHT", -20, -285)
+        duration:SetWidth(230)
+        duration:SetupMenu(function(_, menu)
+            local function isSelected(seconds) return alertDuration() == seconds end
+            local function selectDuration(seconds) GuildAvengerDB.alertDuration = seconds end
+            for _, seconds in ipairs(alertDurations) do
+                menu:CreateRadio(L("alertSeconds", seconds), isSelected, selectDuration, seconds)
+            end
+        end)
+        local minimap = checkbox(root, 17, -320, L("showMinimapButton"))
+        minimap:SetScript("OnClick", function(self) addon.SetMinimapShown(self:GetChecked() == true) end)
+
+        local scope, identity, privacyReady, savedReply, savedAttackers
+        label(root, "GameFontHighlight", color.white, L("sightings")):SetPoint("TOPLEFT", 20, -357)
+        local sightings = {}
+        local titles = { send = "sightingSend", receive = "sightingReceive", popup = "sightingPopup" }
+        for index, setting in ipairs({ "send", "receive", "popup" }) do
+            local check = checkbox(root, 17, -353 - index * 27, L(titles[setting]))
+            check:SetScript("OnClick", function(self)
+                local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
+                if currentScope and currentScope == scope and currentIdentity == identity then
+                    addon.SetSightingSetting(setting, self:GetChecked() == true)
+                end
+                root.RefreshGuild()
+            end)
+            sightings[setting] = check
+        end
+
         local rule = root:CreateTexture(nil, "ARTWORK")
-        rule:SetPoint("TOPLEFT", 20, -290)
-        rule:SetPoint("TOPRIGHT", -20, -290)
+        rule:SetPoint("TOPLEFT", 20, -464)
+        rule:SetPoint("TOPRIGHT", -20, -464)
         rule:SetHeight(1)
         rule:SetColorTexture(unpack(color.border))
-        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -303)
-        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -295)
+        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -477)
+        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -469)
         local authors = C_AddOns.GetAddOnMetadata(addonName, "Author") or ""
         local credits = label(root, "GameFontHighlightSmall", color.muted, L("addonCredits", authors))
-        credits:SetPoint("TOPLEFT", 20, -323)
-        credits:SetPoint("TOPRIGHT", -20, -323)
+        credits:SetPoint("TOPLEFT", 20, -497)
+        credits:SetPoint("TOPRIGHT", -20, -497)
         credits:SetJustifyH("LEFT")
 
         local selected = GuildAvengerDB.language
-        local scope, identity, privacyReady, savedReply, savedAttackers
         local apply = button(root, L("applySettings"), 235)
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
@@ -485,6 +523,10 @@ function addon.PromptSettings()
             end
             reply:SetEnabled(privacyReady)
             attackers:SetEnabled(privacyReady)
+            for setting, check in pairs(sightings) do
+                check:SetEnabled(privacyReady)
+                check:SetChecked(privacyReady and addon.SightingSetting(setting))
+            end
             local hintKey = IsInGuild() and "privacyWaitingGuild" or "privacyNoGuild"
             status(guildMessage, true, L(privacyReady and "privacySettingsHint" or hintKey))
             updateApply()
@@ -526,6 +568,8 @@ function addon.PromptSettings()
             addon.RefreshRoster()
             root.RefreshGuild()
             dropdown:GenerateMenu()
+            duration:GenerateMenu()
+            minimap:SetChecked(not GuildAvengerDB.minimapHidden)
         end)
         dropdown:SetupMenu(function(_, menu)
             local function isSelected(language)
@@ -740,13 +784,7 @@ local function createPanel()
             addon.SetPriority(row.entry, not row.entry.high)
         end)
         row.priority:SetPoint("RIGHT", -220, 0)
-        local remove = button(row, L("remove"), 75, function()
-            local entry = row.entry
-            if panel.editing == entry then
-                resetForm()
-            end
-            status(root.status, addon.Delete(entry.name, entry.kind, entry))
-        end)
+        local remove = button(row, L("remove"), 75, function() confirmRemoval(row.entry) end)
         remove:SetPoint("RIGHT", -7, 0)
         button(row, L("note"), 78, function()
             local entry = row.entry
@@ -840,7 +878,12 @@ function addon.RefreshStats()
         local position = (root.page - 1) * statsPageSize + index
         local record = rows[position]
         row.record = record
-        row.add:SetShown(record ~= nil and tab == 3)
+        -- A journal row offers its killer when the death recap showed a named enemy player.
+        local addable = record ~= nil and (tab == 3
+            or (tab == 1 and record.killerHostile == true and record.killer ~= nil))
+        row.add:SetShown(addable)
+        row.add:SetPoint("RIGHT", tab == 1 and -118 or -61, -3)
+        row.detail:SetWidth(tab == 1 and addable and 280 or 476)
         row:SetShown(record ~= nil)
         if record and tab == 1 then
             row.name:SetText(record.killer or L("unknownAttacker"))
@@ -936,7 +979,13 @@ local function createStats()
         row.count = label(row, "GameFontNormalLarge", color.gold)
         row.count:SetPoint("TOPRIGHT", -10, -6)
         row.add = button(row, L("addFromRankings"), 83, function()
-            local ok, message = addon.AddRankedEnemy(row.record.guid)
+            local record = row.record
+            local ok, message
+            if (root.view or root.selectedTab) == 1 then
+                ok, message = addon.AddKiller(record.killerGUID, record.killer)
+            else
+                ok, message = addon.AddRankedEnemy(record.guid)
+            end
             status(root.status, ok, message)
         end)
         row.add:SetPoint("RIGHT", -61, -3)
@@ -1055,6 +1104,18 @@ function addon.InitMinimap()
     end)
     Minimap:HookScript("OnSizeChanged", place)
     place()
+    root:SetShown(not GuildAvengerDB.minimapHidden)
+end
+
+function addon.SetMinimapShown(shown)
+    GuildAvengerDB.minimapHidden = not shown and true or nil
+    if minimapButton then minimapButton:SetShown(shown) end
+end
+
+function addon.ToggleMinimap()
+    local shown = GuildAvengerDB.minimapHidden == true
+    addon.SetMinimapShown(shown)
+    return L(shown and "minimapShown" or "minimapHidden")
 end
 
 local function promptLink(url, title, description)
@@ -1321,6 +1382,22 @@ confirmBulkRemoval = function()
     })
 end
 
+confirmRemoval = function(entry)
+    local scope, key = addon.Scope(), addon.RecordKey(entry)
+    openDialog({
+        title = L("confirmRemove"),
+        text = entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name,
+        confirm = L("remove"),
+        action = function()
+            if not addon.UpdateScope() or addon.Scope() ~= scope or addon.WatchlistRecord(key) ~= entry then
+                return false, L("entryMissing")
+            end
+            if panel.editing == entry then resetForm() end
+            return addon.Delete(entry.name, entry.kind, entry)
+        end,
+    })
+end
+
 submitGuild = function()
     local name, note = manualName(), panel.note:GetText()
     if name then
@@ -1423,6 +1500,12 @@ local function renderReview()
             row.detail:SetWidth(choices > 1 and 302 or 388)
             row.comment:SetWidth(choices > 1 and 319 or 405)
             row.comment:SetShown(record.note ~= "" or change.changedNote == true or change.sources ~= nil)
+            if change.countOnly then
+                -- The note and priority of this entry are proposed in the next row.
+                row.priority:SetText("")
+                row.detail:SetText(L("deathCountChange", record.deaths, change.previous.deaths))
+                row.comment:Hide()
+            end
             local author = change.sources and L("replyAuthors", change.sources)
                 or (record.author ~= "" and record.author or L("unknownAuthor"))
             row.author:SetText(author
@@ -1579,7 +1662,10 @@ end
 
 local function showReview(offer)
     if not review then review = createReview() end
-    table.sort(offer.changes, function(left, right) return left.record.name < right.record.name end)
+    table.sort(offer.changes, function(left, right)
+        if left.record.name ~= right.record.name then return left.record.name < right.record.name end
+        return left.countOnly == true and not right.countOnly
+    end)
     offer.selected = {}
     review.offer = offer
     review.sender:SetText(offer.replyCount and L("inboxSenders", offer.replyCount) or L("sender", offer.sender))
@@ -1652,9 +1738,10 @@ function addon.InitMenus()
     end
 end
 
-local alertName, portraitUnit, expiration, targetButton, pingButton
+local alertName, alertGuild, portraitUnit, expiration, targetButton, pingButton
 local alertMoving = false
-local alertWidth, alertHeight, alertAlpha = 320, 92, 0.84
+-- Wide enough for the guild chat button beside the two protected buttons.
+local alertWidth, alertHeight, alertAlpha = 430, 92, 0.84
 local alertBorder = { 0.88, 0.85, 0.76, 1 }
 local urgentBorder = { 1, 0.70, 0.36, 1 }
 
@@ -1777,7 +1864,7 @@ local function createAlert()
         }
         positionAlert(self)
         refreshAlertButtons()
-        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+        expiration = C_Timer.NewTimer(alertDuration(), addon.CloseAlert)
     end)
     root.portrait = root:CreateTexture(nil, "ARTWORK")
     root.portrait:SetPoint("TOPLEFT", 16, -15)
@@ -1789,13 +1876,13 @@ local function createAlert()
     portraitFrame:SetSize(51, 51)
     root.name = label(root, "GameFontNormalLarge", color.gold)
     root.name:SetPoint("TOPLEFT", 67, -13)
-    root.name:SetWidth(221)
+    root.name:SetWidth(331)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
     root.note = label(root, "GameFontHighlight", color.white)
     root.note:SetPoint("TOPLEFT", 67, -34)
     root.note:SetJustifyH("LEFT")
-    root.comment = commentPreview(root, root.note, 236, 2)
+    root.comment = commentPreview(root, root.note, 346, 2)
     local divider = root:CreateTexture(nil, "ARTWORK")
     divider:SetPoint("TOPLEFT", 67, -59)
     divider:SetPoint("TOPRIGHT", -15, -59)
@@ -1803,6 +1890,21 @@ local function createAlert()
     divider:SetColorTexture(0.66, 0.49, 0.25, 0.55)
     root.priority = label(root, "GameFontHighlightSmall", color.gold, L("high"))
     root.priority:SetPoint("BOTTOMLEFT", 15, 14)
+    -- Posts one visible line to guild chat, and only on a click. It is not a protected action,
+    -- so an ordinary button on the alert works in combat too.
+    root.guild = button(root, L("sightingPostButton"), 126, function()
+        if not alertName then return end
+        local ok, message = addon.PostSighting(alertName, alertGuild)
+        if not ok and message then addon.Say(message) end
+    end)
+    root.guild:SetHeight(23)
+    root.guild:SetPoint("BOTTOMRIGHT", -224, 8)
+    root.guild:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText(L("sightingPostHint"), 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    root.guild:SetScript("OnLeave", function() GameTooltip:Hide() end)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", addon.CloseAlert)
@@ -1833,7 +1935,10 @@ function addon.ShowAlert(entry, preview)
         toast = createAlert()
     end
     cancelAlertTimer()
-    alertName = not preview and not entry.grouped and entry.name or nil
+    -- A sighting from a guildmate is elsewhere, so it gets no target or guild chat button.
+    -- A grouped guild alert names no single enemy either.
+    alertName = not preview and not entry.grouped and not entry.remote and entry.name or nil
+    alertGuild = entry.guild
     portraitUnit = entry.unit
     toast.high = entry.high
     toast.portrait:SetTexture(entry.grouped and bookIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -1843,6 +1948,7 @@ function addon.ShowAlert(entry, preview)
     toast.note:SetText(entry.note)
     toast.comment:SetShown(entry.note ~= "")
     toast.priority:SetShown(entry.high == true)
+    toast.guild:SetShown(alertName ~= nil and IsInGuild())
     toast:Show()
     refreshAlertButtons()
     local sound = GuildAvengerDB.sound
@@ -1850,6 +1956,6 @@ function addon.ShowAlert(entry, preview)
         playAlertSound(entry.high)
     end
     if not alertMoving then
-        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+        expiration = C_Timer.NewTimer(alertDuration(), addon.CloseAlert)
     end
 end
