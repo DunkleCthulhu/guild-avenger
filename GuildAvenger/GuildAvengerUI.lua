@@ -415,23 +415,27 @@ function addon.PromptSettings()
         hint:SetJustifyH("LEFT")
         hint:SetMaxLines(2)
 
-        local selected = addon.Language()
-        local apply = button(root, L("applyLanguage"), 235, function()
-            if InCombatLockdown() then
-                status(message, false, L("reloadAfterCombat"))
-                return
-            end
+        local selected = GuildAvengerDB.language
+        -- WoW refuses a reload started from an addon button, so the player types /reload.
+        local function languageStatus()
+            local waiting = GuildAvengerDB.language ~= addon.Language()
+            status(message, true, L(waiting and "languageSaved" or "languageHint"))
+        end
+        local apply
+        apply = button(root, L("applyLanguage"), 235, function()
             GuildAvengerDB.language = selected
-            ReloadUI()
+            enabled(apply, false)
+            languageStatus()
+            if GuildAvengerDB.language ~= addon.Language() then addon.Say(L("languageSaved")) end
         end)
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
         root:SetScript("OnShow", function()
-            selected = addon.Language()
+            selected = GuildAvengerDB.language
             dropdown:GenerateMenu()
             enabled(apply, false)
             reply:SetChecked(GuildAvengerDB.replyToListRequests == true)
-            status(message, true, L("languageHint"))
+            languageStatus()
         end)
         dropdown:SetupMenu(function(_, menu)
             local function isSelected(language)
@@ -439,8 +443,8 @@ function addon.PromptSettings()
             end
             local function selectLanguage(language)
                 selected = language
-                enabled(apply, selected ~= addon.Language())
-                status(message, true, L("languageHint"))
+                enabled(apply, selected ~= GuildAvengerDB.language)
+                languageStatus()
             end
             menu:CreateRadio("English", isSelected, selectLanguage, "enUS")
             menu:CreateRadio("Українська", isSelected, selectLanguage, "ukUA")
@@ -1221,6 +1225,12 @@ local function renderReview()
             row.detail:SetWidth(choices > 1 and 302 or 388)
             row.comment:SetWidth(choices > 1 and 319 or 405)
             row.comment:SetShown(record.note ~= "" or change.changedNote == true or change.sources ~= nil)
+            if change.countOnly then
+                -- The note and priority of this entry are proposed in the next row.
+                row.priority:SetText("")
+                row.detail:SetText(L("deathCountChange", record.deaths, change.previous.deaths))
+                row.comment:Hide()
+            end
             local author = change.sources and L("replyAuthors", change.sources)
                 or (record.author ~= "" and record.author or L("unknownAuthor"))
             row.author:SetText(author
@@ -1377,7 +1387,10 @@ end
 
 local function showReview(offer)
     if not review then review = createReview() end
-    table.sort(offer.changes, function(left, right) return left.record.name < right.record.name end)
+    table.sort(offer.changes, function(left, right)
+        if left.record.name ~= right.record.name then return left.record.name < right.record.name end
+        return left.countOnly == true and not right.countOnly
+    end)
     offer.selected = {}
     review.offer = offer
     review.sender:SetText(offer.replyCount and L("inboxSenders", offer.replyCount) or L("sender", offer.sender))

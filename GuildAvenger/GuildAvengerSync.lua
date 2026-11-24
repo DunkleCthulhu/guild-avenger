@@ -112,18 +112,21 @@ function addon.PreviewInbox()
     local added, updated, changes = addon.Merge(combined, true, true)
     local planned = {}
     for _, change in ipairs(changes) do
-        local key = change.key
-        local variants = {}
-        for note, authors in pairs(notes[key]) do
-            variants[#variants + 1] = {note = note, authors = sourceLabel(authors)}
+        -- A death count row has its own key and names its entry. It offers no note to choose.
+        local key = change.entry or change.key
+        if not change.countOnly then
+            local variants = {}
+            for note, authors in pairs(notes[key]) do
+                variants[#variants + 1] = {note = note, authors = sourceLabel(authors)}
+            end
+            if change.previous and not notes[key][change.oldNote] then
+                variants[#variants + 1] = {note = change.oldNote, authors = L("currentNote")}
+            end
+            table.sort(variants, function(left, right) return left.note < right.note end)
+            change.variants = variants
         end
-        if change.previous and not notes[key][change.oldNote] then
-            variants[#variants + 1] = {note = change.oldNote, authors = L("currentNote")}
-        end
-        table.sort(variants, function(left, right) return left.note < right.note end)
         change.sources = sourceLabel(sources[key])
-        change.variants = variants
-        planned[key] = change
+        planned[change.key] = change
     end
     local function accept(selection)
         if not addon.UpdateScope() or guildScope() ~= scope then

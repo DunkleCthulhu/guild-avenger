@@ -5,6 +5,8 @@ local listID, entries
 local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
 local observedGuilds = {}
 local guildAlerts = {}
+-- tokens: last alerted enemy per target, mouseover and focus.
+local tokens = {}
 local cooldown = 30
 local deathCooldown = 8
 local guildObservationLifetime = 120
@@ -37,7 +39,8 @@ local function lowerName(value)
     if string.utf8lower then
         return string.utf8lower(value)
     end
-    return (value:lower():gsub("[\208\209][\128-\191]", cyrillicLower))
+    -- Ґ and ґ are D2 90 and D2 91, outside the D0 and D1 lead bytes.
+    return (value:lower():gsub("[\208-\210][\128-\191]", cyrillicLower))
 end
 
 local function clean(value, limit)
@@ -141,7 +144,7 @@ local function updateScope()
         importLegacy(entries, legacy, "G")
         GuildAvengerDB.guildsImported[id] = true
     end
-    alerts, deaths, observedGuilds, guildAlerts = {}, {}, {}, {}
+    alerts, deaths, observedGuilds, guildAlerts, tokens = {}, {}, {}, {}, {}
     for unit in pairs(plates) do
         plates[unit] = false
     end
@@ -644,9 +647,13 @@ local function mergeEntries(incoming, preview, explicit, planned)
         return 0, 0
     end
     local added, updated, changes, removed = 0, 0, {}, 0
+    local touched = {}
     for key, record in pairs(incoming) do
-        local previous = entries[key]
         local plan = planned and planned[key]
+        -- A count row is reviewed apart from the note or priority row of the same entry.
+        local countOnly = plan and plan.countOnly
+        if countOnly then key = plan.entry end
+        local previous = entries[key]
         local same = not plan or (plan.previous == previous and (not previous or
             (previous.note == plan.oldNote and (previous.high == true) == plan.oldHigh)))
         if record.removed and explicit and previous and same then
@@ -667,18 +674,30 @@ local function mergeEntries(incoming, preview, explicit, planned)
                     removalLog()[key] = nil
                 end
             elseif previous then
-                local moreDeaths = record.deaths > previous.deaths
+                local moreDeaths = record.deaths > previous.deaths and not (plan and plan.split)
                 local higherPriority = record.high == true and not previous.high
-                local changedNote = explicit and same and record.note ~= previous.note
-                local changedPriority = explicit and same and (record.high == true) ~= (previous.high == true)
+                local changedNote = explicit and same and not countOnly and record.note ~= previous.note
+                local changedPriority = explicit and same and not countOnly
+                    and (record.high == true) ~= (previous.high == true)
                 if moreDeaths or (not explicit and higherPriority) or changedNote or changedPriority then
-                    updated = updated + 1
+                    if not touched[key] then
+                        touched[key] = true
+                        updated = updated + 1
+                    end
                     if preview then
-                        changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths,
+                        local split = moreDeaths and (changedNote or changedPriority)
+                        if split then
+                            -- A tab cannot appear in a name, so this key never collides with an entry.
+                            changes[#changes + 1] = { key = key .. "\tdeaths", entry = key, record = record,
+                                moreDeaths = true, countOnly = true, previous = previous,
+                                oldNote = previous.note, oldHigh = previous.high == true }
+                        end
+                        changes[#changes + 1] = { key = key, record = record, moreDeaths = moreDeaths and not split,
+                            split = split or nil,
                             higherPriority = higherPriority, changedNote = changedNote, changedPriority = changedPriority,
                             previous = previous, oldNote = previous.note, oldHigh = previous.high == true }
                     else
-                        previous.deaths = math.max(previous.deaths, record.deaths)
+                        if moreDeaths then previous.deaths = record.deaths end
                         if changedNote then previous.note = record.note end
                         if changedPriority then previous.high = record.high == true and true or nil end
                         if not explicit and higherPriority then previous.high = true end
@@ -778,6 +797,13 @@ local function slash(input)
         addon.OpenStats()
     elseif command == "settings" then
         addon.PromptSettings()
+    elseif command == "reload" then
+        -- WoW refuses a reload from an addon button but allows it from a typed command.
+        if InCombatLockdown() then
+            message = L("reloadAfterCombat")
+        else
+            C_UI.Reload()
+        end
     elseif command == "list" then
         local list = sortedEntries()
         say(#list == 0 and L("emptyListChat") or L("entryCountChat", #list))
@@ -819,10 +845,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.SeasonRosterReady()
         addon.RefreshStats()
     elseif event == "PLAYER_LEAVING_WORLD" then
-        plates, observedGuilds, deaths, guildAlerts = {}, {}, {}, {}
+        plates, observedGuilds, deaths, guildAlerts, tokens = {}, {}, {}, {}, {}
         addon.CloseAlert()
-    elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" then
-        scanUnit(event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover")
+    elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" or event == "PLAYER_FOCUS_CHANGED" then
+        local unit = event == "PLAYER_TARGET_CHANGED" and "target"
+            or event == "PLAYER_FOCUS_CHANGED" and "focus" or "mouseover"
+        tokens[unit] = scanUnit(unit)
     elseif event == "NAME_PLATE_UNIT_ADDED" or event == "NAME_PLATE_UNIT_REMOVED" then
         local unit = ...
         if isText(unit) then
@@ -846,8 +874,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.ResetOwnDeath()
     elseif event == "UNIT_COMBAT" then
         local unit = ...
-        if isText(unit) and (unit == "target" or unit == "mouseover" or unit == "focus" or plates[unit] ~= nil) then
-            scanUnit(unit)
+        -- Combat events repeat through a fight, so an enemy already announced on this unit stays quiet.
+        if isText(unit) then
+            if plates[unit] ~= nil then
+                plates[unit] = scanUnit(unit, plates[unit])
+            elseif unit == "target" or unit == "mouseover" or unit == "focus" then
+                tokens[unit] = scanUnit(unit, tokens[unit])
+            end
         end
     elseif event == "UNIT_HEALTH" then
         local unit = ...
@@ -875,6 +908,7 @@ for _, event in ipairs({
     "INITIAL_CLUBS_LOADED", "GUILD_ROSTER_UPDATE", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_COMBAT", "UNIT_DIED", "PARTY_KILL",
     "UNIT_HEALTH", "CHAT_MSG_ADDON", "CHAT_MSG_COMBAT_HONOR_GAIN", "PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST",
+    "PLAYER_FOCUS_CHANGED",
 }) do
     frame:RegisterEvent(event)
 end

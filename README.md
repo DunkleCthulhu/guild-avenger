@@ -10,21 +10,23 @@ Extract the Guild Avenger release ZIP into `World of Warcraft/_forever_/Interfac
 
 ### Interface language
 
-Starting with 3.1.0, open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. In 3.1.1, the button is in the upper-right corner next to the close button. Choose **English** or **Українська** and click **Apply and reload UI**. Upgrades from earlier versions start in Ukrainian. Fresh installs start in English unless WoW reports a Ukrainian locale. Your choice is saved between sessions.
+Starting with 3.1.0, open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. In 3.1.1, the button is in the upper-right corner next to the close button. Choose **English** or **Українська**, click **Save language** (**Зберегти мову**), and type `/reload` in chat to apply it. The button only saves your choice, because WoW refuses a UI reload started from an addon button. `/gavenger reload` works the same as `/reload`. Upgrades from earlier versions start in Ukrainian. Fresh installs start in English unless WoW reports a Ukrainian locale. Your choice is saved between sessions.
 
 ### Migrating from GrudgeBook or Forever Watch
 
 Close WoW, install Guild Avenger, and run the migration script from this repository on Windows. Replace the example path with your `_forever_` folder.
 
 ```powershell
-./scripts/Migrate-GuildAvenger.ps1 -ClientRoot 'C:/Program Files (x86)/World of Warcraft/_forever_'
+powershell -ExecutionPolicy Bypass -File .\scripts\Migrate-GuildAvenger.ps1 -ClientRoot 'C:\Program Files (x86)\World of Warcraft\_forever_'
 ```
+
+The `-ExecutionPolicy Bypass` switch applies to this one run. Without it, Windows blocks downloaded scripts by default.
 
 The script migrates data from earlier versions of this project. It copies your lists, statistics, and settings into a separate `GuildAvenger.lua` SavedVariables file, then moves the old addon and its data files to `GuildAvengerMigrationBackup`. Add `-WhatIf` to preview the changes. Run the migration before you first launch Guild Avenger.
 
 ## Detection and death counts
 
-- Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. The alert shows their portrait, name, note, and high-priority indicator. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
+- Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. Combat events from an enemy you already see as your target, mouseover, focus, or nameplate do not repeat the alert. Targeting the enemy again does. The alert shows their portrait, name, note, and high-priority indicator. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
 - By default, normal-priority alerts use the raid warning sound and high-priority alerts play a distinct ascending four-note sound. Open `/gavenger` and click **Звуки…** to select and preview built-in WoW sounds for each priority. You can mute character or guild matches separately, or play sounds for high-priority matches only. When a character and their guild both match, the character entry controls the priority, note, and sound settings.
 - The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
 - When several enemies from the same guild are spotted together and match only a normal-priority guild entry, they share one alert. A high-priority alert keeps its own portrait and target controls.
@@ -59,6 +61,7 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger help` | Show command help. |
 | `/gavenger stats` | Open the personal death journal and guild rankings. |
 | `/gavenger settings` | Choose the addon language. |
+| `/gavenger reload` | Reload the UI, like `/reload`. |
 
 ## Sharing watchlists
 
@@ -66,7 +69,7 @@ Select the rows you want, or click **Select all** (**Позначити всі**
 
 A guild chat post includes a GitHub link for installing or updating the addon. Guild Avenger hides the prompt for recipients with the same version or a newer one. If a list arrives from a newer version, the recipient gets a chat link that opens a window with the copyable GitHub URL. Compatible entries can be accepted right away.
 
-Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Recipients can review new entries, proposed note or priority changes, and proposed removals. They must select the proposed changes or removals before accepting them. When sharing the full list, enable **Suggest removed entries** (**Запропонувати вилучені записи**) to include entries you removed in the last 30 days. Merging keeps the higher death count. Both players need Guild Avenger 3.0.0 or later.
+Both sharing methods verify the sender and recipient against the guild roster and send packets 0.25 seconds apart. Recipients can review new entries, proposed note or priority changes, and proposed removals. They must select the proposed changes or removals before accepting them. When sharing the full list, enable **Suggest removed entries** (**Запропонувати вилучені записи**) to include entries you removed in the last 30 days. Merging keeps the higher death count. When one entry has both a higher death count and a proposed note or priority change, the count is a separate row that starts selected, so you can keep it without accepting the other change. Both players need Guild Avenger 3.0.0 or later.
 
 **Request guild watchlists** asks online guildmates running 3.2.0 or later for their lists. They can send their list from the chat link or opt in to automatic replies in **Settings**. Replies include current characters, guilds, notes, priorities, and death counts. In 3.3.0, open **Inbox** to review replies together. The same enemy occupies one row with its sources listed. Use **Notes** to choose from differing comments and **Select all new** to mark new entries. Replies that arrive while you are reviewing remain in the inbox.
 
