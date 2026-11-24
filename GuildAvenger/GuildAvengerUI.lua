@@ -175,6 +175,11 @@ local function updateAddLabels()
     panel.guild.label:SetText(manual and L("addGuild") or L("guildFromTarget"))
 end
 
+local function searchText(value)
+    local text = addon.SearchLower(value)
+    return (text:gsub("’", "'"):gsub("ʼ", "'"):gsub("[ \t\r\n_%-]+", " "):match("^ *(.-) *$"))
+end
+
 local function renderRows()
     local slider = panel.scroll
     local offset = math.floor(slider:GetValue())
@@ -187,7 +192,7 @@ local function renderRows()
             row.check:SetChecked(panel.selected[key] == true)
             row.name:SetText(entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name)
             row.note:SetText(entry.note)
-            row.metadata:SetText(lastSeen(entry) or (entry.pending and L("pendingVerification") or metadata(entry)))
+            row.metadata:SetText(lastSeen(entry) or (addon.IsPendingEntry(entry) and L("pendingVerification") or metadata(entry)))
             row.deaths:SetText(("%d"):format(entry.deaths))
             row.priority.label:SetText(entry.high and L("high") or L("normal"))
             row.priority.label:SetTextColor(unpack(entry.high and color.gold or color.muted))
@@ -211,10 +216,11 @@ function addon.RefreshUI()
     local allEntries = addon.Entries()
     panel.entries = {}
     local present = {}
-    local query = addon.LowerName(panel.search:GetText():match("^%s*(.-)%s*$"))
+    local query = searchText(panel.search:GetText())
     for _, entry in ipairs(allEntries) do
         present[addon.RecordKey(entry)] = true
-        local matches = query == "" or addon.LowerName(entry.name):find(query, 1, true) or addon.LowerName(entry.note):find(query, 1, true)
+        local matches = query == "" or searchText(entry.name):find(query, 1, true)
+            or searchText(entry.note or ""):find(query, 1, true)
         if matches and (not panel.filterKind or panel.filterKind == entry.kind) and (not panel.filterHigh or entry.high) then
             panel.entries[#panel.entries + 1] = entry
         end
@@ -544,8 +550,7 @@ local function createPanel()
     tinsert(UISpecialFrames, "GuildAvengerPanel")
     local header = CreateFrame("Frame", nil, root)
     header:SetPoint("TOPLEFT", 20, -12)
-    header:SetPoint("TOPRIGHT", -170, -12)
-    header:SetHeight(34)
+    header:SetSize(178, 34)
     header:EnableMouse(true)
     header:RegisterForDrag("LeftButton")
     header:SetScript("OnDragStart", function() root:StartMoving() end)
@@ -557,13 +562,31 @@ local function createPanel()
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     label(header, "GameFontNormalLarge", color.gold, "Guild Avenger"):SetPoint("LEFT", 29, 0)
     root.search = input(root, 210, addon.NoteLimit)
+    root.search:SetTextInsets(8, 30, 0, 0)
     root.search:SetPoint("LEFT", header, "LEFT", 201, 0)
     local hint = label(root.search, "GameFontHighlightSmall", color.muted, L("searchHint"))
     hint:SetPoint("LEFT", 8, 0)
+    local clearSearch = button(root.search, "×", 23, function()
+        root.search:SetText("")
+        root.search:SetFocus()
+    end)
+    clearSearch:SetHeight(23)
+    clearSearch:SetPoint("RIGHT", -3, 0)
+    clearSearch:Hide()
+    clearSearch:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+        GameTooltip:SetText(L("clearSearch"))
+        GameTooltip:Show()
+    end)
+    clearSearch:SetScript("OnLeave", function() GameTooltip:Hide() end)
     root.search:SetScript("OnTextChanged", function(self)
-        hint:SetShown(self:GetText() == "")
-        root.scroll:SetValue(0)
-        addon.RefreshUI()
+        local empty = self:GetText() == ""
+        hint:SetShown(empty)
+        clearSearch:SetShown(not empty)
+        if root.scroll then
+            root.scroll:SetValue(0)
+            addon.RefreshUI()
+        end
     end)
     root.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
@@ -1167,8 +1190,13 @@ end
 
 submitGuild = function()
     local name, note = manualName(), panel.note:GetText()
+    if name then
+        local ok, message = addon.Add(name, note, nil, "G")
+        finishForm(ok, message, name, "G")
+        return
+    end
     local _, targetGuild = addon.EnemyEntry("target", "G")
-    if not name and targetGuild then
+    if targetGuild then
         local ok, message = addon.Add("", note, "target", "G")
         finishForm(ok, message, targetGuild, "G")
         return
@@ -1176,7 +1204,7 @@ submitGuild = function()
     openDialog({
         title = L("addGuildManually"),
         text = L("guildName"),
-        value = name, limit = addon.NameLimit, confirm = L("add"),
+        limit = addon.NameLimit, confirm = L("add"),
         action = function(guild)
             if not guild:match("%S") then return false, L("enterGuildName") end
             local ok, message = addon.Add(guild, note, nil, "G")

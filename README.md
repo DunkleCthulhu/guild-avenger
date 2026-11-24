@@ -37,11 +37,11 @@ The script migrates data from earlier versions of this project. It copies your l
 
 - Drag the `/gavenger` window by its title bar and press Esc to close it. The scrollable list includes names, notes, who added each entry and when, and death counts. Click an entry's priority button to switch between normal and high. High-priority entries appear first. Entries from old versions start with normal priority.
 - The **All** (**Усі**) tab opens by default. Switch to **Characters** (**Персонажі**) or **Guilds** (**Гільдії**) to narrow the list. **High priority only** (**Лише високий пріоритет**) works in every tab.
-- Search by part of a character name, guild name, or note alongside the other filters. Each row shows when and where your addon last saw the target. Hover over the row for the author and date added.
+- Search by part of a character name, guild name, or note alongside the other filters. Search ignores letter case, and you can clear it with **×**. Each row shows when and where your addon last saw the target. Hover over the row for the author and date added.
 - **Remove selected** (**Вилучити позначені**) asks for confirmation before removing all selected rows, including selections hidden by a filter or another tab.
 - Click **…** in the watchlist to read the full note, author, and last sighting. Import rows and alerts also offer full notes.
 - **Add target** (**Додати ціль**) and **Guild from target** (**Гільдія з цілі**) save the character or guild of your current enemy target and use the note you entered. If you typed a name, the buttons use it. If the target is unavailable, the form prompts for manual entry. You can add a guild by name without targeting a member, except for your own guild. You can also right-click an enemy target or focus portrait to add the character or guild with a note.
-- For manually entered characters, WoW must allow the addon to verify that the person belongs to the opposing faction, can be attacked, and is outside your group and guild. Use the full name and keep the character targeted, under your mouse, in focus, or visible through a nameplate.
+- Starting with 3.3.2, you can type a character's first and last name to add them without a target. If WoW cannot see the character yet, the entry stays pending until the addon can verify an attackable enemy from the opposing faction outside your group and guild. Tracking and sharing start after verification.
 
 | Command | Action |
 | --- | --- |

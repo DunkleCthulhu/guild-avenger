@@ -3,6 +3,7 @@ local L = addon.Text
 local frame = CreateFrame("Frame")
 local listID, entries
 local plates, alerts, deaths, knownGUIDs = {}, {}, {}, {}
+local pendingNames = {}
 local observedGuilds = {}
 local guildAlerts = {}
 local cooldown = 30
@@ -40,9 +41,17 @@ local function lowerName(value)
     return (value:lower():gsub("[\208\209][\128-\191]", cyrillicLower))
 end
 
+local function searchLower(value)
+    if string.utf8lower then return string.utf8lower(value) end
+    -- Byte-wise lower() may alter UTF-8 in a non-C locale. Keep saved keys
+    -- compatible and use an explicit case fold for search and pending names.
+    local ascii = value:gsub("[A-Z]", function(letter) return string.char(letter:byte() + 32) end)
+    return (ascii:gsub("[\208-\210][\128-\191]", cyrillicLower))
+end
+
 local function clean(value, limit)
-    if isText(value) and #value <= limit and not value:find("[%c|]") then
-        return value:match("^%s*(.-)%s*$")
+    if isText(value) and #value <= limit and not value:find("[%z\001-\031\127|]") then
+        return value:match("^ *(.-) *$")
     end
 end
 
@@ -55,14 +64,16 @@ local function playerName(value, fromWire)
     local suffix
     if fromWire then
         local name
-        name, suffix = value:match("^([^%s%-]+[ %-][^%s%-]+)%-(%S+)$")
+        name, suffix = value:match("^([^ %-]+[ %-][^ %-]+)%-([^ ]+)$")
         value = name or value
     end
     if #value > nameLimit then
         return
     end
-    local first, surname = value:match("^([^%s%-]+)[%s%-]+([^%s%-]+)$")
-    if first and not (first .. surname):gsub("'", ""):find("[%d%p]") then
+    local first, surname = value:match("^([^ %-]+)[ %-]+([^ %-]+)$")
+    -- Reject ASCII punctuation and digits except apostrophes. Lua's %p can
+    -- also match UTF-8 bytes in some Windows locales.
+    if first and not (first .. surname):find("[\032-\038\040-\064\091-\096\123-\127]") then
         local full = first .. " " .. surname
         return lowerName(full), full, suffix and lowerName(suffix)
     end
@@ -95,8 +106,12 @@ local function entryName(value, kind)
 end
 
 local function recordKey(entry)
-    if entry.pending then return "pending:" .. entry.guid:upper() end
+    if entry.pending and entry.guid then return "pending:" .. entry.guid:upper() end
     return entryName(entry.name, entry.kind)
+end
+
+local function isPendingEntry(entry)
+    return entry.pending == true or (entry.pendingName == true and entry.faction == nil)
 end
 
 local function importLegacy(imported, legacy, kind)
@@ -112,10 +127,12 @@ local function importLegacy(imported, legacy, kind)
 end
 
 local function indexGUIDs()
-    knownGUIDs = {}
+    knownGUIDs, pendingNames = {}, {}
     for key, entry in pairs(entries) do
         if entry.guid then
             knownGUIDs[entry.guid] = key
+        elseif entry.pendingName and isPendingEntry(entry) then
+            pendingNames[searchLower(entry.name)] = key
         end
     end
 end
@@ -216,14 +233,18 @@ local function enemyEntry(unit, kind)
     return key, name, faction, guid
 end
 
-local function visibleEnemy(key, kind)
+local function visibleUnit(key, kind)
+    local function matches(unit)
+        if kind == "G" then return enemyEntry(unit, kind) == key end
+        return unitName(unit) == key
+    end
     for _, unit in ipairs({ "target", "mouseover", "focus" }) do
-        if key == enemyEntry(unit, kind) then
+        if matches(unit) then
             return unit
         end
     end
     for unit in pairs(plates) do
-        if key == enemyEntry(unit, kind) then
+        if matches(unit) then
             return unit
         end
     end
@@ -240,18 +261,36 @@ local function remember(entry, key, faction, guid)
     end
 end
 
-local function trackedPlayer(key, name, guid)
+local function trackedPlayer(key, name, faction, guid)
     local entry = entries[key]
-    local pending = guid and entries["pending:" .. guid:upper()]
-    if pending then
-        entries[recordKey(pending)] = nil
+    local normalizedName = searchLower(name)
+    local pendingKey = pendingNames[normalizedName]
+    if pendingKey then
+        pendingNames[normalizedName] = nil
+        if pendingKey ~= key then
+            local pending = entries[pendingKey]
+            entries[pendingKey] = nil
+            if not entry then
+                entries[key], entry = pending, pending
+            end
+        end
+    end
+    local ranked = guid and entries["pending:" .. guid:upper()]
+    if ranked then
+        entries[recordKey(ranked)] = nil
         if not entry then
-            pending.name, pending.pending = name, nil
-            entries[key], entry = pending, pending
+            entries[key], entry = ranked, ranked
         else
             knownGUIDs[guid] = nil
         end
         if entry.guid == guid then knownGUIDs[guid] = key end
+    end
+    if not entry then return end
+    local wasPending = isPendingEntry(entry)
+    if wasPending then entry.name = name end
+    entry.pending, entry.pendingName = nil, nil
+    remember(entry, key, faction, guid)
+    if wasPending or ranked or pendingKey then
         addon.RefreshUI()
     end
     return entry
@@ -279,15 +318,18 @@ function addon.HonorTarget(victim)
     if not key or not entries or isAllyName(key) then return end
     local personal = entries[key]
     local function result(guild, verified)
-        local byName = personal and not personal.pending and (verified or isDifferentFaction(personal.faction))
+        local byName = personal and not isPendingEntry(personal) and (verified or isDifferentFaction(personal.faction))
         local byGuild = guild and entries[guild] ~= nil
         local reason = byName and (byGuild and "honorBoth" or "honorCharacter") or (byGuild and "honorGuild")
         return key, guild, reason or nil
     end
 
     local function guildAt(unit)
-        local observed, _, faction, guid = enemyUnit(unit, true)
+        local observed, name, faction, guid = enemyUnit(unit, true)
         if observed == key then
+            if (personal and isPendingEntry(personal)) or pendingNames[searchLower(name)] then
+                personal = trackedPlayer(key, name, faction, guid)
+            end
             local _, guild = matchGuild(unit, key, faction, guid)
             return guild or false
         end
@@ -366,14 +408,11 @@ local function scanUnit(unit, alreadySeen)
     if not key then
         return false
     end
-    local personal = trackedPlayer(key, name, guid)
+    local personal = trackedPlayer(key, name, faction, guid)
     local guild, guildKey = matchGuild(unit, key, faction, guid)
     local entry = personal or guild
     if not entry then
         return false
-    end
-    if personal then
-        remember(personal, key, faction, guid)
     end
     local now = GetServerTime()
     local zone = clean(GetRealZoneText(), 140)
@@ -420,13 +459,12 @@ local function recordDeath(guid, killer)
         local unit = UnitTokenFromGUID(guid)
         local candidate, name, faction, resolvedGUID = enemyUnit(unit, true)
         if candidate and resolvedGUID == guid then
-            key, personal = candidate, trackedPlayer(candidate, name, guid)
-            if personal then remember(personal, key, faction, guid) end
+            key, personal = candidate, trackedPlayer(candidate, name, faction, guid)
             matchGuild(unit, key, faction, guid)
         end
     end
     local now = GetTime()
-    if personal and (personal.pending or personal.guid ~= guid or not isDifferentFaction(personal.faction) or isAllyName(key)) then
+    if personal and (isPendingEntry(personal) or personal.guid ~= guid or not isDifferentFaction(personal.faction) or isAllyName(key)) then
         personal = nil
     end
     local observation = observedGuilds[guid]
@@ -501,11 +539,13 @@ local function addEnemy(input, reason, fromUnit, kind)
             return false, L("invalidEnemy")
         end
         if not fromUnit or wanted ~= enemyEntry(fromUnit, kind) then
-            unit = visibleEnemy(wanted, kind)
+            unit = visibleUnit(wanted, kind)
         end
     end
     local key, name, faction, guid = enemyEntry(unit, kind)
     local seenNow = key ~= nil
+    local pending = kind ~= "G" and wanted and not fromUnit and not unit
+    if pending then key, name = wanted, writtenName end
     if kind == "G" and wanted and not fromUnit and not key then
         local ownGuild = guildName((GetGuildInfo("player")))
         if IsInGuild() and not ownGuild then
@@ -517,12 +557,10 @@ local function addEnemy(input, reason, fromUnit, kind)
         key, name = wanted, writtenName
     end
     if not key then
-        if wanted and kind ~= "G" then
-            return false, L("characterNotVisible")
-        end
         return false, kind == "G" and L("guildNotVisible") or L("invalidEnemy")
     end
-    if entries[key] then
+    local pendingName = kind ~= "G" and searchLower(name)
+    if entries[key] or (pendingName and pendingNames[pendingName]) then
         return false, L("alreadyListed")
     end
     local note = clean(reason, noteLimit)
@@ -531,18 +569,19 @@ local function addEnemy(input, reason, fromUnit, kind)
     end
     local _, author = unitName("player")
     local entry = { name = name, note = note, author = author or "", addedAt = GetServerTime(),
-        deaths = 0, kind = kind or "P" }
+        deaths = 0, kind = kind or "P", pendingName = pending and true or nil }
     if seenNow then sighting(entry, entry.addedAt, clean(GetRealZoneText(), 140)) end
     entries[key] = entry
+    if pending then pendingNames[pendingName] = key end
     removalLog()[key] = nil
     if kind == "G" then
         local player, _, observedFaction, observedGUID = enemyUnit(unit)
         if player then matchGuild(unit, player, observedFaction, observedGUID) end
-    else
+    elseif not pending then
         remember(entry, key, faction, guid)
     end
     addon.RefreshUI()
-    return true, L("entryAdded", name)
+    return true, L(pending and "entryAddedPending" or "entryAdded", name)
 end
 
 local function changeNote(input, reason, kind, selected)
@@ -564,7 +603,8 @@ end
 
 local function removeEntry(key, entry, rememberRemoval)
     if entry.guid then knownGUIDs[entry.guid] = nil end
-    if rememberRemoval and not entry.pending then
+    if entry.pendingName then pendingNames[searchLower(entry.name)] = nil end
+    if rememberRemoval and not isPendingEntry(entry) then
         removalLog()[key] = { name = entry.name, kind = entry.kind, at = GetServerTime() }
     end
     entries[key], alerts[key] = nil, nil
@@ -582,7 +622,9 @@ local function deleteEnemy(input, kind, selected)
     elseif input == "" then
         key = unitName("target")
     else
-        key = entryName(input, kind)
+        local name
+        key, name = entryName(input, kind)
+        if kind ~= "G" and name and not entries[key] then key = pendingNames[searchLower(name)] end
     end
     local entry = key and entries[key]
     if not entry then
@@ -607,7 +649,7 @@ function addon.DeleteSelection(selection, scope)
 end
 
 local function eligibleRecord(key, entry)
-    if entry.pending then return false end
+    if isPendingEntry(entry) then return false end
     if entry.kind == "G" then
         return key ~= guildName((GetGuildInfo("player")))
     end
@@ -707,9 +749,11 @@ addon.IsText = isText
 addon.Say = say
 addon.Clean = clean
 addon.LowerName = lowerName
+addon.SearchLower = searchLower
 addon.PlayerName = playerName
 addon.EntryName = entryName
 addon.RecordKey = recordKey
+addon.IsPendingEntry = isPendingEntry
 addon.UnitName = unitName
 addon.EnemyUnit = enemyUnit
 addon.EnemyEntry = enemyEntry
