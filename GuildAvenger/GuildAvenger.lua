@@ -768,11 +768,16 @@ local function slash(input)
         showHelp()
     elseif command == "add" then
         _, message = addEnemy(splitAdd(rest))
+    elseif command == "addtarget" then
+        -- "add" reads any text as a name, so the target takes a note through its own command.
+        _, message = addEnemy("", rest)
     elseif command == "guild" then
         local operation, guild = rest:match("^(%S+)%s*(.*)$")
         if operation == "add" then
             local name, note = guild:match('^"([^"]+)"%s*(.*)$')
             _, message = addEnemy(name or guild, note or "", nil, "G")
+        elseif operation == "addtarget" then
+            _, message = addEnemy("", guild, nil, "G")
         elseif operation == "del" or operation == "remove" then
             _, message = deleteEnemy(guild, "G")
         else

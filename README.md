@@ -50,8 +50,10 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger` or `/gavenger ui` | Open or close the watchlist. |
 | `/gavenger list` | List characters and guilds with their priorities in chat. |
 | `/gavenger add "Character Name" Note` | Add an enemy. With no arguments, use the current target. |
+| `/gavenger addtarget Note` | Add the current target with a note. |
 | `/gavenger del Character Name` | Remove a character. With no arguments, use the current target. |
 | `/gavenger guild add` | Add the current enemy target's guild. Use `/gavenger guild add "Guild Name" Note` to enter a guild and note manually. |
+| `/gavenger guild addtarget Note` | Add the current enemy target's guild with a note. |
 | `/gavenger guild del Guild Name` | Remove a guild. |
 | `/gavenger share Character Name` | Offer a list to a guildmate. With no arguments, use the current target. |
 | `/gavenger share guild` | Post a link to the full watchlist in guild chat. |
