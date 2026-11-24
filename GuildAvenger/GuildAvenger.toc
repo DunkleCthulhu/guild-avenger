@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: Guild Avenger
 ## Notes: A False Memory guild addon for PvP watchlists, enemy alerts, and guild sharing in WoW: Forever.
-## Author: DunkleCthulhu, @ne_multik, @nikulin_daniil
-## Version: 3.3.6
+## Author: Dunkle_Cthulhu, ne_multik, marakesz
+## Version: 3.3.7
 ## SavedVariables: GuildAvengerDB, GuildAvengerLegacyDB
 
 GuildAvengerLocale.lua

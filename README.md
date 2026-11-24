@@ -4,7 +4,7 @@
 
 Guild Avenger is a free, open-source PvP addon by the **False Memory** guild for **World of Warcraft: Forever 1.60.1**. Keep a watchlist of enemy characters and guilds, get alerts when you encounter them, and share entries and optional PvP statistics with guildmates.
 
-**Authors** · `DunkleCthulhu`, `@ne_multik`, `@nikulin_daniil`.
+**Authors** · `Dunkle_Cthulhu`, `ne_multik`, `marakesz`.
 
 ## Reporting a bug
 

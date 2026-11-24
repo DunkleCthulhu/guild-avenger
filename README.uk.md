@@ -4,7 +4,7 @@
 
 Книга Образ від гільдії **False Memory** для World of Warcraft: Forever 1.60.1. Вона веде список ворожих персонажів і гільдій, попереджає про зустріч та рахує зафіксовані смерті персонажів.
 
-**Автори** · `DunkleCthulhu`, `@ne_multik`, `@nikulin_daniil`.
+**Автори** · `Dunkle_Cthulhu`, `ne_multik`, `marakesz`.
 
 ## Повідомити про баг
 
