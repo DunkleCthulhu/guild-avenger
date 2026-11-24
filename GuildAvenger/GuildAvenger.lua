@@ -331,8 +331,17 @@ local function warn(entry, player, unit, guid)
         local history = L("killedYou", killed, date("%d.%m %H:%M", last))
         note = note ~= "" and (history .. " · " .. note) or history
     end
-    addon.ShowAlert({ name = player, note = note,
+    addon.ShowAlert({ name = player, note = note, guild = entry.kind == "G" and entry.name or nil,
         kind = entry.kind, high = entry.high, unit = unit })
+end
+
+-- The player's own entry for an enemy that a guildmate reported: the character, or the named guild.
+function addon.ListedEntry(key, guild)
+    if not entries then return end
+    local personal = entries[key]
+    if personal and not personal.pending then return personal end
+    local guildKey = guild and guildName(guild)
+    return guildKey and entries[guildKey] or nil
 end
 
 local function groupGuildAlert(guildKey, entry, player, unit, guid)
@@ -381,6 +390,10 @@ local function scanUnit(unit, alreadySeen)
     local guildSeen = sighting(guild, now, zone)
     if personalSeen or guildSeen then addon.RefreshUI() end
     if key ~= alreadySeen and startAlert(key) then
+        -- Every new alert may be reported to the guild, whether it is shown alone or in a group.
+        -- The enemy's guild lets guildmates who list only that guild see the report.
+        local enemyGuild = entry.kind == "G" and entry.name or clean((GetGuildInfo(unit)), nameLimit)
+        addon.ReportSighting(key, entry, name, enemyGuild ~= "" and enemyGuild or nil)
         if not personal and not entry.high then
             groupGuildAlert(guildKey, entry, name, unit, guid)
         else
@@ -855,6 +868,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.InitSync()
         addon.InitStats()
         addon.InitSeason()
+        addon.InitSightings()
         addon.InitMenus()
         SLASH_GUILDAVENGER1 = "/gavenger"
         SlashCmdList.GUILDAVENGER = slash
@@ -922,6 +936,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.Receive(...)
         addon.ReceiveStats(...)
         addon.ReceiveSeason(...)
+        addon.ReceiveSighting(...)
     elseif event == "ADDON_LOADED" then
         addon.InitMenus()
     end

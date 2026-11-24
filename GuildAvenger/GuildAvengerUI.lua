@@ -403,7 +403,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 292, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 396, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -461,11 +461,22 @@ function addon.PromptSettings()
         local minimap = checkbox(root, 17, -219, L("showMinimapButton"))
         minimap:SetScript("OnClick", function(self) addon.SetMinimapShown(self:GetChecked() == true) end)
 
+        -- Guild sightings. All three start off, because sending shares the player's location.
+        label(root, "GameFontHighlight", color.white, L("sightings")):SetPoint("TOPLEFT", 20, -254)
+        local sightings = {}
+        local titles = { send = L("sightingSend"), receive = L("sightingReceive"), popup = L("sightingPopup") }
+        for index, setting in ipairs({ "send", "receive", "popup" }) do
+            local check = checkbox(root, 17, -246 - index * 26, titles[setting])
+            check:SetScript("OnClick", function(self) addon.SetSightingSetting(setting, self:GetChecked() == true) end)
+            sightings[setting] = check
+        end
+
         root:SetScript("OnShow", function()
             selected = GuildAvengerDB.language
             dropdown:GenerateMenu()
             duration:GenerateMenu()
             minimap:SetChecked(not GuildAvengerDB.minimapHidden)
+            for setting, check in pairs(sightings) do check:SetChecked(addon.SightingSetting(setting)) end
             enabled(apply, false)
             reply:SetChecked(GuildAvengerDB.replyToListRequests == true)
             languageStatus()
@@ -1525,9 +1536,10 @@ function addon.InitMenus()
     end
 end
 
-local alertName, portraitUnit, expiration, targetButton, pingButton
+local alertName, alertGuild, portraitUnit, expiration, targetButton, pingButton
 local alertMoving = false
-local alertWidth, alertHeight, alertAlpha = 320, 92, 0.84
+-- Wide enough for the guild chat button beside the two protected buttons.
+local alertWidth, alertHeight, alertAlpha = 430, 92, 0.84
 local alertBorder = { 0.88, 0.85, 0.76, 1 }
 local urgentBorder = { 1, 0.70, 0.36, 1 }
 
@@ -1662,13 +1674,13 @@ local function createAlert()
     portraitFrame:SetSize(51, 51)
     root.name = label(root, "GameFontNormalLarge", color.gold)
     root.name:SetPoint("TOPLEFT", 67, -13)
-    root.name:SetWidth(221)
+    root.name:SetWidth(331)
     root.name:SetJustifyH("LEFT")
     root.name:SetWordWrap(false)
     root.note = label(root, "GameFontHighlight", color.white)
     root.note:SetPoint("TOPLEFT", 67, -34)
     root.note:SetJustifyH("LEFT")
-    root.comment = commentPreview(root, root.note, 236, 2)
+    root.comment = commentPreview(root, root.note, 346, 2)
     local divider = root:CreateTexture(nil, "ARTWORK")
     divider:SetPoint("TOPLEFT", 67, -59)
     divider:SetPoint("TOPRIGHT", -15, -59)
@@ -1676,6 +1688,15 @@ local function createAlert()
     divider:SetColorTexture(0.66, 0.49, 0.25, 0.55)
     root.priority = label(root, "GameFontHighlightSmall", color.gold, L("high"))
     root.priority:SetPoint("BOTTOMLEFT", 15, 14)
+    -- Posts one visible line to guild chat, and only on a click. It is not a protected action,
+    -- so an ordinary button on the alert works in combat too.
+    root.guild = button(root, L("postInGuildChat"), 126, function()
+        if not alertName then return end
+        local ok, message = addon.PostSighting(alertName, alertGuild)
+        if not ok and message then addon.Say(message) end
+    end)
+    root.guild:SetHeight(23)
+    root.guild:SetPoint("BOTTOMRIGHT", -224, 8)
     local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -5, -5)
     close:SetScript("OnClick", addon.CloseAlert)
@@ -1706,7 +1727,10 @@ function addon.ShowAlert(entry, preview)
         toast = createAlert()
     end
     cancelAlertTimer()
-    alertName = not preview and not entry.grouped and entry.name or nil
+    -- A sighting from a guildmate is elsewhere, so it gets no target or guild chat button.
+    -- A grouped guild alert names no single enemy either.
+    alertName = not preview and not entry.grouped and not entry.remote and entry.name or nil
+    alertGuild = entry.guild
     portraitUnit = entry.unit
     toast.high = entry.high
     toast.portrait:SetTexture(entry.grouped and bookIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -1716,6 +1740,7 @@ function addon.ShowAlert(entry, preview)
     toast.note:SetText(entry.note)
     toast.comment:SetShown(entry.note ~= "")
     toast.priority:SetShown(entry.high == true)
+    toast.guild:SetShown(alertName ~= nil and IsInGuild())
     toast:Show()
     refreshAlertButtons()
     local sound = GuildAvengerDB.sound

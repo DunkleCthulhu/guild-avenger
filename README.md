@@ -76,6 +76,17 @@ Both sharing methods verify the sender and recipient against the guild roster an
 
 **Request guild watchlists** asks online guildmates running 3.2.0 or later for their lists. They can send their list from the chat link or opt in to automatic replies in **Settings**. Replies include current characters, guilds, notes, priorities, and death counts. In 3.3.0, open **Inbox** to review replies together. The same enemy occupies one row with its sources listed. Use **Notes** to choose from differing comments and **Select all new** to mark new entries. Replies that arrive while you are reviewing remain in the inbox.
 
+## Guild sightings
+
+Guild Avenger can tell guildmates where you met a listed enemy. Everything here is off by default, because a report shares your location. Open **Settings** (**Налаштування**) to turn on any of the three options.
+
+- **Report enemies I meet to the guild** sends a hidden addon message to the guild when you get a new alert. It contains the enemy's name, their guild name when the addon can see it, your zone and subzone, and your map coordinates rounded to whole percent. Nothing is sent from dungeons, battlegrounds, or arenas. You report the same enemy at most once a minute, at most one enemy every 5 seconds, and not at all for a minute after a guildmate reported that enemy.
+- **Show guildmates' sightings in my chat** prints a line in your own chat frame, visible only to you. You see sightings only for enemies on your own watchlist or members of guilds on it, with your own note and priority, and at most once a minute per enemy. Reports are accepted only from members of your guild roster.
+- **Also show a popup with sound** shows the alert window for these sightings too.
+- The alert has a **Post in guild chat** (**У чат гільдії**) button. It writes one visible line with the enemy and your location to guild chat, and only when you click it.
+
+Guildmates on versions before 3.4.0 neither send nor receive sightings.
+
 ## Statistics
 
 - **My Deaths** (**Мої смерті**) shows up to 100 deaths with a confirmed player killing blow, with time, zone, and coordinates when WoW provides them. If an older entry lacks a verified player ID, it stays in saved data and is omitted from this view. A row whose killer was recorded as an enemy player has an **Add to list** (**До книги**) button that adds the killer to the watchlist. Deaths recorded before 3.4.0 have no button.

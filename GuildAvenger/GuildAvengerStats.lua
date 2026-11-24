@@ -133,6 +133,8 @@ local function location(entry)
     end
 end
 
+addon.Location = location
+
 local function lethalHit(when, clock)
     if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return end
     local ok, hits = pcall(C_DeathRecap.GetRecapEvents)

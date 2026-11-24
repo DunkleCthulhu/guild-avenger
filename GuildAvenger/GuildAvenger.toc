@@ -10,4 +10,5 @@ GuildAvengerSync.lua
 GuildAvengerStats.lua
 GuildAvengerSeason.lua
 GuildAvengerHonor.lua
+GuildAvengerSightings.lua
 GuildAvengerUI.lua
