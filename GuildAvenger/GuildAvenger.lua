@@ -891,12 +891,14 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.RefreshRoster()
         addon.InitMenus()
         addon.RefreshUI()
+        addon.RefreshSettingsGuild()
         if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
         addon.SeasonRosterReady()
         addon.RefreshStats()
         addon.RefreshUI()
+        addon.RefreshSettingsGuild()
     elseif event == "PLAYER_LEAVING_WORLD" then
         plates, observedGuilds, deaths, guildAlerts = {}, {}, {}, {}
         addon.CloseAlert()

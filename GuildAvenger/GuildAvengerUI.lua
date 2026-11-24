@@ -406,9 +406,15 @@ function addon.PromptSounds()
     soundWindow:Show()
 end
 
+function addon.RefreshSettingsGuild()
+    if settingsWindow and settingsWindow:IsShown() then
+        settingsWindow.RefreshGuild()
+    end
+end
+
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 364, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 389, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -435,67 +441,87 @@ function addon.PromptSettings()
         attackerHint:SetJustifyH("LEFT")
         attackerHint:SetMaxLines(3)
 
+        local guildMessage = label(root, "GameFontHighlightSmall", color.muted)
+        guildMessage:SetPoint("TOPLEFT", 20, -254)
+        guildMessage:SetPoint("TOPRIGHT", -20, -254)
+        guildMessage:SetJustifyH("LEFT")
+        guildMessage:SetMaxLines(2)
         local rule = root:CreateTexture(nil, "ARTWORK")
-        rule:SetPoint("TOPLEFT", 20, -265)
-        rule:SetPoint("TOPRIGHT", -20, -265)
+        rule:SetPoint("TOPLEFT", 20, -290)
+        rule:SetPoint("TOPRIGHT", -20, -290)
         rule:SetHeight(1)
         rule:SetColorTexture(unpack(color.border))
-        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -278)
-        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -270)
+        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -303)
+        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -295)
         local authors = C_AddOns.GetAddOnMetadata(addonName, "Author") or ""
         local credits = label(root, "GameFontHighlightSmall", color.muted, L("addonCredits", authors))
-        credits:SetPoint("TOPLEFT", 20, -298)
-        credits:SetPoint("TOPRIGHT", -20, -298)
+        credits:SetPoint("TOPLEFT", 20, -323)
+        credits:SetPoint("TOPRIGHT", -20, -323)
         credits:SetJustifyH("LEFT")
 
-        local selected = addon.Language()
-        local scope, identity, savedReply, savedAttackers
-        local apply = button(root, L("applyLanguage"), 235, function()
-            local languageChanged = selected ~= addon.Language()
-            local nextReply, nextAttackers = reply:GetChecked() == true, attackers:GetChecked() == true
-            local replyChanged, attackersChanged = nextReply ~= savedReply, nextAttackers ~= savedAttackers
-            if languageChanged and InCombatLockdown() then
-                status(message, false, L("reloadAfterCombat"))
-                return
-            end
-            if replyChanged or attackersChanged then
-                local ready = addon.UpdateScope()
-                local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
-                if not ready or not scope or currentScope ~= scope or currentIdentity ~= identity then
-                    status(message, false, L("guildPrivacyChanged"))
-                    return
-                end
-                if replyChanged then addon.SetAutoReply(nextReply) end
-                if attackersChanged then addon.SetAttackerSharing(nextAttackers) end
-            end
-            root:Hide()
-            if languageChanged then
-                GuildAvengerDB.language = selected
-                ReloadUI()
-            end
-        end)
+        local selected = GuildAvengerDB.language
+        local scope, identity, privacyReady, savedReply, savedAttackers
+        local apply = button(root, L("applySettings"), 235)
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
-        local function updateApply()
-            local languageChanged = selected ~= addon.Language()
-            apply.label:SetText(L(languageChanged and "applyLanguage" or "applySettings"))
-            enabled(apply, languageChanged or (reply:GetChecked() == true) ~= savedReply
+        local function sharingChanged()
+            return privacyReady and ((reply:GetChecked() == true) ~= savedReply
                 or (attackers:GetChecked() == true) ~= savedAttackers)
-            status(message, true, L(languageChanged and "languageHint" or "privacySettingsHint"))
         end
+        local function updateApply()
+            local languageChanged = selected ~= GuildAvengerDB.language
+            enabled(apply, languageChanged or sharingChanged())
+            local reloadNeeded = GuildAvengerDB.language ~= addon.Language()
+            message:SetText(L(not languageChanged and reloadNeeded and "languageSaved" or "languageHint"))
+        end
+        root.RefreshGuild = function()
+            local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
+            privacyReady = currentScope ~= nil
+            if privacyReady and (currentScope ~= scope or currentIdentity ~= identity) then
+                scope, identity = currentScope, currentIdentity
+                savedReply, savedAttackers = addon.AutoReplyEnabled(), addon.AttackerSharing()
+                reply:SetChecked(savedReply)
+                attackers:SetChecked(savedAttackers)
+            end
+            reply:SetEnabled(privacyReady)
+            attackers:SetEnabled(privacyReady)
+            local hintKey = IsInGuild() and "privacyWaitingGuild" or "privacyNoGuild"
+            status(guildMessage, true, L(privacyReady and "privacySettingsHint" or hintKey))
+            updateApply()
+        end
+        apply:SetScript("OnClick", function()
+            GuildAvengerDB.language = selected
+            if sharingChanged() then
+                local ready = addon.UpdateScope()
+                local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
+                if not ready or currentScope ~= scope or currentIdentity ~= identity then
+                    root.RefreshGuild()
+                    status(guildMessage, false, L("guildPrivacyChanged"))
+                    return
+                end
+                local nextReply, nextAttackers = reply:GetChecked() == true, attackers:GetChecked() == true
+                if nextReply ~= savedReply then addon.SetAutoReply(nextReply) end
+                if nextAttackers ~= savedAttackers then addon.SetAttackerSharing(nextAttackers) end
+                savedReply, savedAttackers = nextReply, nextAttackers
+            end
+            if selected ~= addon.Language() then
+                updateApply()
+            else
+                root:Hide()
+            end
+        end)
         reply:SetScript("OnClick", updateApply)
         attackers:SetScript("OnClick", updateApply)
         root:SetScript("OnShow", function()
+            selected = GuildAvengerDB.language
+            scope, identity = nil, nil
+            reply:SetChecked(false)
+            attackers:SetChecked(false)
             addon.UpdateScope()
-            scope, identity = addon.GuildPrivacyIdentity()
-            savedReply, savedAttackers = addon.AutoReplyEnabled(), scope ~= nil and addon.AttackerSharing()
-            selected = addon.Language()
-            reply:SetChecked(savedReply)
-            reply:SetEnabled(scope ~= nil)
-            attackers:SetChecked(savedAttackers)
-            attackers:SetEnabled(scope ~= nil)
+            addon.ReadRoster()
+            addon.RefreshRoster()
+            root.RefreshGuild()
             dropdown:GenerateMenu()
-            updateApply()
         end)
         dropdown:SetupMenu(function(_, menu)
             local function isSelected(language)
@@ -505,8 +531,8 @@ function addon.PromptSettings()
                 selected = language
                 updateApply()
             end
-            menu:CreateRadio("English", isSelected, selectLanguage, "enUS")
-            menu:CreateRadio("Українська", isSelected, selectLanguage, "ukUA")
+            menu:CreateRadio(L("languageEnglish"), isSelected, selectLanguage, "enUS")
+            menu:CreateRadio(L("languageUkrainian"), isSelected, selectLanguage, "ukUA")
         end)
         settingsWindow = root
     end
@@ -567,7 +593,7 @@ local function createFilters(root)
 end
 
 local function createPanel()
-    local root = window("GuildAvengerPanel", 662, 636, "DIALOG")
+    local root = window("GuildAvengerPanel", 662, 648, "DIALOG")
     root:SetMovable(true)
     root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GuildAvengerPanel")
