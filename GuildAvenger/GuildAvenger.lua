@@ -819,6 +819,8 @@ local function slash(input)
         addon.OpenStats()
     elseif command == "settings" then
         addon.PromptSettings()
+    elseif command == "minimap" then
+        message = addon.ToggleMinimap()
     elseif command == "reload" then
         -- WoW refuses a reload from an addon button but allows it from a typed command.
         if InCombatLockdown() then

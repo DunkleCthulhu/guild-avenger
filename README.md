@@ -28,7 +28,7 @@ The script migrates data from earlier versions of this project. It copies your l
 
 - Guild Avenger alerts you about characters on your watchlist and members of listed guilds when you target them, mouse over them, see an available nameplate, or receive a readable `UNIT_COMBAT` event. Combat events from an enemy you already see as your target, mouseover, focus, or nameplate do not repeat the alert. Targeting the enemy again does. The alert shows their portrait, name, note, and high-priority indicator. If this enemy is in your death journal, the alert starts with how many times they killed you and when they last did. The name and note also appear in chat. Alerts for the same enemy have a 30-second cooldown.
 - By default, normal-priority alerts use the raid warning sound and high-priority alerts play a distinct ascending four-note sound. Open `/gavenger` and click **Звуки…** to select and preview built-in WoW sounds for each priority. You can mute character or guild matches separately, or play sounds for high-priority matches only. When a character and their guild both match, the character entry controls the priority, note, and sound settings.
-- The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
+- The alert appears near the top of the screen in a semi-transparent WoW-style frame. High-priority alerts have a gold border. Drag the alert with the left mouse button to move it. Its position is saved between sessions. The alert stays for 12 seconds by default. Choose 6, 12, 20, or 30 seconds in **Settings** (**Налаштування**), where you can also hide the minimap button. Use `/gavenger test` and `/gavenger test high` to preview the two styles.
 - When several enemies from the same guild are spotted together and match only a normal-priority guild entry, they share one alert. A high-priority alert keeps its own portrait and target controls.
 - The **Target** (**У ціль**) and **Danger Ping** (**Пінг небезпеки**) buttons are available outside combat. The ping button appears when the enemy from the alert is your current target and WoW pings are enabled. Click it to send a built-in danger ping on that target.
 - The death counter uses available `PARTY_KILL` and `UNIT_DIED` events and counts duplicate reports of the same death once. A listed guild member's death increases the guild total. If the character also has an individual entry, their counter increases too. WoW must provide a readable identifier, and the addon must recognize the character or guild. Forever reserves `COMBAT_LOG_EVENT_UNFILTERED` for the game client.
@@ -62,7 +62,8 @@ The script migrates data from earlier versions of this project. It copies your l
 | `/gavenger download` | Open a window with a copyable GitHub link. |
 | `/gavenger help` | Show command help. |
 | `/gavenger stats` | Open the personal death journal and guild rankings. |
-| `/gavenger settings` | Choose the addon language. |
+| `/gavenger settings` | Open the settings: language, alert duration, minimap button. |
+| `/gavenger minimap` | Hide or show the minimap button. |
 | `/gavenger reload` | Reload the UI, like `/reload`. |
 
 ## Sharing watchlists

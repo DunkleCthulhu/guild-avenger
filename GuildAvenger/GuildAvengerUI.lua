@@ -390,9 +390,20 @@ function addon.PromptSounds()
     soundWindow:Show()
 end
 
+local alertDurations = { 6, 12, 20, 30 }
+
+-- Seconds an alert stays on screen. Anything but a preset falls back to the original 12.
+local function alertDuration()
+    local saved = GuildAvengerDB.alertDuration
+    for _, seconds in ipairs(alertDurations) do
+        if saved == seconds then return seconds end
+    end
+    return 12
+end
+
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 235, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 292, "FULLSCREEN_DIALOG")
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -430,9 +441,31 @@ function addon.PromptSettings()
         end)
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
+
+        -- Like the checkbox above, these two apply at once.
+        label(root, "GameFontHighlight", color.white, L("alertDuration")):SetPoint("TOPLEFT", 20, -191)
+        local duration = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
+        duration:SetPoint("TOPRIGHT", -20, -184)
+        duration:SetWidth(230)
+        duration:SetupMenu(function(_, menu)
+            local function isSelected(seconds)
+                return alertDuration() == seconds
+            end
+            local function selectDuration(seconds)
+                GuildAvengerDB.alertDuration = seconds
+            end
+            for _, seconds in ipairs(alertDurations) do
+                menu:CreateRadio(L("alertSeconds", seconds), isSelected, selectDuration, seconds)
+            end
+        end)
+        local minimap = checkbox(root, 17, -219, L("showMinimapButton"))
+        minimap:SetScript("OnClick", function(self) addon.SetMinimapShown(self:GetChecked() == true) end)
+
         root:SetScript("OnShow", function()
             selected = GuildAvengerDB.language
             dropdown:GenerateMenu()
+            duration:GenerateMenu()
+            minimap:SetChecked(not GuildAvengerDB.minimapHidden)
             enabled(apply, false)
             reply:SetChecked(GuildAvengerDB.replyToListRequests == true)
             languageStatus()
@@ -950,6 +983,18 @@ function addon.InitMinimap()
     end)
     Minimap:HookScript("OnSizeChanged", place)
     place()
+    root:SetShown(not GuildAvengerDB.minimapHidden)
+end
+
+function addon.SetMinimapShown(shown)
+    GuildAvengerDB.minimapHidden = not shown and true or nil
+    if minimapButton then minimapButton:SetShown(shown) end
+end
+
+function addon.ToggleMinimap()
+    local shown = GuildAvengerDB.minimapHidden == true
+    addon.SetMinimapShown(shown)
+    return L(shown and "minimapShown" or "minimapHidden")
 end
 
 function addon.PromptDownload(url, description)
@@ -1605,7 +1650,7 @@ local function createAlert()
         }
         positionAlert(self)
         refreshAlertButtons()
-        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+        expiration = C_Timer.NewTimer(alertDuration(), addon.CloseAlert)
     end)
     root.portrait = root:CreateTexture(nil, "ARTWORK")
     root.portrait:SetPoint("TOPLEFT", 16, -15)
@@ -1678,6 +1723,6 @@ function addon.ShowAlert(entry, preview)
         playAlertSound(entry.high)
     end
     if not alertMoving then
-        expiration = C_Timer.NewTimer(12, addon.CloseAlert)
+        expiration = C_Timer.NewTimer(alertDuration(), addon.CloseAlert)
     end
 end
