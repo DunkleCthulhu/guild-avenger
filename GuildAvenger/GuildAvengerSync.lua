@@ -30,8 +30,26 @@ end
 
 local installedRank = versionRank(version) or 0
 
-local function installMessage(release, language)
+local function installMessage(release, language, short)
+    if short then
+        return addon.TextFor(language, "installMessageShort", release, downloadURL)
+    end
     return addon.TextFor(language, "installMessage", release, downloadURL, addon.TextFor(language, "projectInfo"))
+end
+
+-- A chat message holds 255 bytes, and the Ukrainian text is close to that.
+local function fittingInstallMessage(release, language)
+    local message = installMessage(release, language)
+    return #message <= 255 and message or installMessage(release, language, true)
+end
+
+local function isInstallMessage(message, release)
+    for _, language in ipairs({ "ukUA", "enUS" }) do
+        if message == installMessage(release, language) or message == installMessage(release, language, true) then
+            return true
+        end
+    end
+    return false
 end
 
 local function downloadLink()
@@ -440,7 +458,7 @@ function addon.Publish(selection, includeRemovals)
     end
     published[id] = { packets = packets, at = now, scope = guildScope(), requested = {} }
     C_ChatInfo.SendChatMessage("[Guild Avenger " .. id .. "]", "GUILD")
-    C_ChatInfo.SendChatMessage(installMessage(version, addon.Language()), "GUILD")
+    C_ChatInfo.SendChatMessage(fittingInstallMessage(version, addon.Language()), "GUILD")
     return true, L("listPublished")
 end
 
@@ -451,7 +469,7 @@ local function chatFilter(_, _, message, sender, ...)
     local release = message:match("^Guild Avenger v([%d.]+)%. ")
     local availableRank = release and versionRank(release)
     -- Plain guild chat uses the sender's language. Addon links use the reader's language.
-    if availableRank and (message == installMessage(release, "ukUA") or message == installMessage(release, "enUS")) then
+    if availableRank and isInstallMessage(message, release) then
         if availableRank <= installedRank then
             return true
         end
