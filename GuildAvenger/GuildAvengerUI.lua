@@ -102,7 +102,7 @@ local function window(name, width, height, strata)
     return root
 end
 
-local function showComment(text, title)
+local function showTextWindow(text, title)
     if not commentWindow then
         local root = window("GuildAvengerComment", 500, 200, "FULLSCREEN_DIALOG")
         root:SetFrameLevel(32)
@@ -136,7 +136,7 @@ local function commentPreview(parent, text, width, lines, fullText)
     control:SetSize(width, lines * 13)
     label(control, "GameFontHighlightSmall", color.gold, "…"):SetPoint("TOPRIGHT", 0, -1)
     control:SetScript("OnClick", function()
-        if fullText then showComment(fullText()) else showComment(text:GetText()) end
+        if fullText then showTextWindow(fullText()) else showTextWindow(text:GetText()) end
     end)
     return control
 end
@@ -490,7 +490,11 @@ function addon.PromptSettings()
             updateApply()
         end
         apply:SetScript("OnClick", function()
+            local languageChanged = selected ~= GuildAvengerDB.language
             GuildAvengerDB.language = selected
+            if languageChanged and selected ~= addon.Language() then
+                showTextWindow(L("languageSaved"), L("languageReloadTitle"))
+            end
             if sharingChanged() then
                 local ready = addon.UpdateScope()
                 local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
