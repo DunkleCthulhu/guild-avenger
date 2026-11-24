@@ -86,8 +86,6 @@ end
 function addon.ReceiveSighting(receivedPrefix, message, channel, sender)
     if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix or not addon.IsText(channel) or channel ~= "GUILD"
         or not addon.IsText(message) or #message > messageLimit then return end
-    local settings = settingsFor(addon.GuildPrivacyIdentity())
-    if not settings or not settings.receive then return end
     local reporterKey, reporter = addon.GuildSender(sender)
     if not reporterKey or reporterKey == addon.UnitName("player") then return end
     local kind, name, guild, x, y, zone, area =
@@ -99,12 +97,16 @@ function addon.ReceiveSighting(receivedPrefix, message, channel, sender)
     x, y = tonumber(x), tonumber(y)
     if not key or not zone or not area or (x == nil) ~= (y == nil) or (x and (x > 100 or y > 100)) then return end
     local now = GetTime()
+    -- A guildmate already reported this enemy, so this client stays quiet about them for a while.
+    -- That holds whether or not this player shows sightings or lists the enemy.
+    recently(heard, key, now)
+    heard[key] = now
+    local settings = settingsFor(addon.GuildPrivacyIdentity())
+    if not settings or not settings.receive then return end
     -- Only enemies on the player's own watchlist are shown, with the player's own note and priority.
     -- A character report names their guild too, so a player who lists only the guild sees it.
     local entry = addon.ListedEntry(key, guild ~= "" and guild or nil)
     if not entry or recently(shown, key, now) then return end
-    recently(heard, key, now)
-    heard[key] = now
     shown[key] = now
     local place = placeText(zone, area, x, y)
     local line = L(entry.high and "sightingHigh" or "sighting", full, place, reporter)
