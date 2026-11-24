@@ -310,7 +310,7 @@ local function submit()
     finishForm(ok, message, name, kind)
 end
 
-local submitGuild, confirmBulkRemoval
+local submitGuild, confirmBulkRemoval, confirmRemoval
 
 local function checkbox(parent, x, y, title)
     local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
@@ -630,13 +630,7 @@ local function createPanel()
             addon.SetPriority(row.entry, not row.entry.high)
         end)
         row.priority:SetPoint("RIGHT", -220, 0)
-        local remove = button(row, L("remove"), 75, function()
-            local entry = row.entry
-            if panel.editing == entry then
-                resetForm()
-            end
-            status(root.status, addon.Delete(entry.name, entry.kind, entry))
-        end)
+        local remove = button(row, L("remove"), 75, function() confirmRemoval(row.entry) end)
         remove:SetPoint("RIGHT", -7, 0)
         button(row, L("note"), 78, function()
             local entry = row.entry
@@ -1124,6 +1118,18 @@ confirmBulkRemoval = function()
         action = function()
             local removed = addon.DeleteSelection(selection, scope)
             return removed > 0, removed > 0 and L("removedCount", removed) or L("selectionChanged")
+        end,
+    })
+end
+
+confirmRemoval = function(entry)
+    openDialog({
+        title = L("confirmRemove"),
+        text = entry.kind == "G" and L("guildNameLabel", entry.name) or entry.name,
+        confirm = L("remove"),
+        action = function()
+            if panel.editing == entry then resetForm() end
+            return addon.Delete(entry.name, entry.kind, entry)
         end,
     })
 end
