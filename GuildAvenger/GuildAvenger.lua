@@ -608,26 +608,37 @@ local function eligibleRecord(key, entry)
     return isDifferentFaction(entry.faction) and not isAllyName(key)
 end
 
-function addon.AddRankedEnemy(guid)
-    if not updateScope() then return false, L("guildLoading") end
-    local enemy = addon.RankedEnemy(guid)
-    if not enemy then return false, L("rankedEntryMissing") end
+-- Adds an enemy known by character ID. If WoW cannot see them now, the entry waits for the next encounter.
+local function addByGUID(guid, enemyName, note)
     local pendingKey = "pending:" .. guid:upper()
-    local nameKey = enemy.name:find(" ", 1, true) and playerName(enemy.name)
+    local nameKey = enemyName:find(" ", 1, true) and playerName(enemyName)
     if nameKey and isAllyName(nameKey) then return false, L("invalidEnemy") end
     if entries[pendingKey] or knownGUIDs[guid] or (nameKey and entries[nameKey]) then
         return false, L("enemyAlreadyListed")
     end
-    local note = L("rankedEnemyNote")
     local unit = UnitTokenFromGUID and UnitTokenFromGUID(guid)
     local key, name = enemyUnit(unit)
     if key then return addEnemy(name, note, unit) end
     local _, author = unitName("player")
-    entries[pendingKey] = { name = enemy.name, note = note, author = author or "", addedAt = GetServerTime(),
+    entries[pendingKey] = { name = enemyName, note = note, author = author or "", addedAt = GetServerTime(),
         kind = "P", deaths = 0, guid = guid, pending = true }
     if nameKey then removalLog()[nameKey] = nil end
     addon.RefreshUI()
-    return true, L("rankedEnemyAdded", enemy.name)
+    return true, L("rankedEnemyAdded", enemyName)
+end
+
+function addon.AddRankedEnemy(guid)
+    if not updateScope() then return false, L("guildLoading") end
+    local enemy = addon.RankedEnemy(guid)
+    if not enemy then return false, L("rankedEntryMissing") end
+    return addByGUID(guid, enemy.name, L("rankedEnemyNote"))
+end
+
+-- The killer from a My Deaths journal row.
+function addon.AddKiller(guid, name)
+    if not updateScope() then return false, L("guildLoading") end
+    if not isText(guid) or not isText(name) or name == "" then return false, L("rankedEntryMissing") end
+    return addByGUID(guid, name, L("killerNote"))
 end
 
 function addon.RemovalProposals()

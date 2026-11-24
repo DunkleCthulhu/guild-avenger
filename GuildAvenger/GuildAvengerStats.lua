@@ -143,6 +143,8 @@ local function identifyKiller(entry, hit, guid, score)
         end
     end
     entry.killer, entry.killerGUID = (name ~= "" and name or nil), guid
+    -- An enemy player: the journal row can offer to add this killer to the watchlist.
+    entry.killerHostile = hostile and true or nil
     if score and hostile and entry.killer then
         local previous = score.enemies[guid]
         score.enemies[guid] = { name = name, count = math.min(maxCount, (previous and previous.count or 0) + 1) }

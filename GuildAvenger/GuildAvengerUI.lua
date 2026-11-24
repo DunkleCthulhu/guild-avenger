@@ -724,7 +724,12 @@ function addon.RefreshStats()
         local position = (root.page - 1) * statsPageSize + index
         local record = rows[position]
         row.record = record
-        row.add:SetShown(record ~= nil and tab == 3)
+        -- A journal row offers its killer when the death recap showed a named enemy player.
+        local addable = record ~= nil and (tab == 3
+            or (tab == 1 and record.killerHostile == true and record.killer ~= nil))
+        row.add:SetShown(addable)
+        row.add:SetPoint("RIGHT", tab == 1 and -118 or -61, -3)
+        row.detail:SetWidth(tab == 1 and addable and 280 or 476)
         row:SetShown(record ~= nil)
         if record and tab == 1 then
             row.name:SetText(record.killer or L("unknownAttacker"))
@@ -820,7 +825,13 @@ local function createStats()
         row.count = label(row, "GameFontNormalLarge", color.gold)
         row.count:SetPoint("TOPRIGHT", -10, -6)
         row.add = button(row, L("addFromRankings"), 83, function()
-            local ok, message = addon.AddRankedEnemy(row.record.guid)
+            local record = row.record
+            local ok, message
+            if (root.view or root.selectedTab) == 1 then
+                ok, message = addon.AddKiller(record.killerGUID, record.killer)
+            else
+                ok, message = addon.AddRankedEnemy(record.guid)
+            end
             status(root.status, ok, message)
         end)
         row.add:SetPoint("RIGHT", -61, -3)

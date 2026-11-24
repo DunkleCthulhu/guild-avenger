@@ -77,7 +77,7 @@ Both sharing methods verify the sender and recipient against the guild roster an
 
 ## Statistics
 
-- **My Deaths** (**Мої смерті**) shows up to 100 deaths with a confirmed player killing blow, with time, zone, and coordinates when WoW provides them. If an older entry lacks a verified player ID, it stays in saved data and is omitted from this view.
+- **My Deaths** (**Мої смерті**) shows up to 100 deaths with a confirmed player killing blow, with time, zone, and coordinates when WoW provides them. If an older entry lacks a verified player ID, it stays in saved data and is omitted from this view. A row whose killer was recorded as an enemy player has an **Add to list** (**До книги**) button that adds the killer to the watchlist. Deaths recorded before 3.4.0 have no button.
 - **Avengers** (**Месники**) ranks Honor awarded for kills against each guildmate’s watchlist. Healers and other party members get credit when WoW awards them Honor for the same kill. An enemy on both the character and guild lists counts once. An award has to name a recognizable enemy. For guild-only matches, the addon needs to have seen that enemy’s guild.
 - **Killing blows** (**Останні удари**) keeps the earlier ranking and counts final hits by guildmates or their active pets against watchlist entries. An enemy that matches both a character and a guild entry gives one killing blow in the ranking.
 - **Enemies** (**Вороги**) ranks the enemies with the most confirmed killing blows against guildmates who share their statistics. It groups reports by enemy character ID and keeps the highest reported total from each guildmate.
