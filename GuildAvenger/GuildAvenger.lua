@@ -325,6 +325,12 @@ local function warn(entry, player, unit, guid)
         local score = L("guildmateKills", count)
         note = note ~= "" and (score .. " · " .. note) or score
     end
+    -- The player's own history with this enemy goes first, where the two-line alert always shows it.
+    local killed, last = addon.KillerHistory(guid, player)
+    if killed > 0 then
+        local history = L("killedYou", killed, date("%d.%m %H:%M", last))
+        note = note ~= "" and (history .. " · " .. note) or history
+    end
     addon.ShowAlert({ name = player, note = note,
         kind = entry.kind, high = entry.high, unit = unit })
 end
