@@ -146,6 +146,12 @@ local function status(text, success, message)
     text:SetText(message or "")
 end
 
+function addon.NotifyWatchlistRequest(name)
+    if UIErrorsFrame then
+        UIErrorsFrame:AddMessage(L("listRequestNotice", name), 1, 0.82, 0, 1)
+    end
+end
+
 local function metadata(entry)
     local author = entry.author ~= "" and entry.author or L("unknownAuthor")
     if entry.addedAt > 0 then

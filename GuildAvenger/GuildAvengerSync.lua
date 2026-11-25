@@ -10,15 +10,17 @@ local sending, ticker, sequence = nil, nil, 0
 local incoming = {}
 local published, waiting = {}, {}
 local requestedLists, guildRequests = {}, {}
+local pendingGuildRequests = {}
 local pullInbox, inboxScope = {}, nil
 local lastListRequest
 local requestLifetime = 300
 local requestCooldown = 60
+local rosterWait, maxPendingRequests = 15, 32
 local autoReplyRevision = 0
 local packetLimit = 240
 local capabilities = "M"
 local capable, announced, probing = {}, {}, {}
-local makePackets, enqueue, currentMember
+local makePackets, enqueue, currentMember, drainGuildRequests
 
 local function transferID()
     sequence = sequence % 65535 + 1
@@ -212,6 +214,7 @@ function addon.ReadRoster()
         roster, rosterScope = {}, nil
     end
     addon.RefreshSuggestions()
+    if rosterScope then drainGuildRequests() end
 end
 
 function addon.RefreshRoster()
@@ -341,11 +344,12 @@ local function stopSending(message)
 end
 
 local function sendNext()
+    local transfer, offer = sending.transfer, sending.offer
     local member
     if addon.UpdateScope() and sending.scope == guildScope() then
         member = currentMember(sending.key, sending.identity)
     end
-    if not member or not member.online then
+    if not member or (not member.online and not transfer.pullID) then
         stopSending(L("recipientLeftRoster"))
         return
     end
@@ -353,7 +357,6 @@ local function sendNext()
         stopSending(L("autoReplyStopped"))
         return
     end
-    local transfer, offer = sending.transfer, sending.offer
     if (offer and not activeOffer(offer)) or (not offer and not snapshotCurrent(transfer)) then
         stopSending(L("watchlistTransferRevoked"))
         return
@@ -428,7 +431,7 @@ end
 local function startTransfer(key, transfer, revision)
     local scope, member = guildScope(), guildMember(key)
     local current = scope and member and currentMember(key, member.identity)
-    if not current or not current.online or (sending and #waiting >= 20) then return false end
+    if not current or (not current.online and not transfer.pullID) or (sending and #waiting >= 20) then return false end
     local id = transfer.id
     local probe = { key = key, scope = scope, identity = current.identity, transfer = transfer, revision = revision }
     probing[id] = probe
@@ -524,7 +527,7 @@ makePackets = function(selection, includeRemovals, pullID)
         end
     end
     flush()
-    return {packets = packets, packed = packed, id = id, records = guards}
+    return {packets = packets, packed = packed, id = id, records = guards, pullID = pullID}
 end
 
 enqueue = function(key, transfer, offer, revision, packed)
@@ -547,13 +550,15 @@ function addon.RequestWatchlists()
     if not addon.UpdateScope() or not guildScope() then return false, L("sharingRequiresGuild") end
     addon.RefreshRoster()
     local scope, own, now = guildScope(), addon.UnitName("player"), GetTime()
+    if not addon.IsGuildMember(own) then addon.ReadRoster() end
     if not addon.IsGuildMember(own) then return false, L("rosterLoading") end
     if lastListRequest and lastListRequest.scope == scope and now - lastListRequest.at < requestCooldown then
         return false, L("listRequestCooldown")
     end
     local id = transferID()
-    if C_ChatInfo.SendAddonMessage(prefix, "P\t" .. id, "GUILD") ~= results.Success then
-        return false, L("shareRequestFailed")
+    local result = C_ChatInfo.SendAddonMessage(prefix, "P\t" .. id, "GUILD")
+    if result ~= results.Success then
+        return false, L(result == results.AddOnMessageLockdown and "chatLockdown" or "shareRequestFailed")
     end
     for key, request in pairs(requestedLists) do
         if request.scope ~= scope or now - request.at >= requestLifetime then requestedLists[key] = nil end
@@ -566,7 +571,7 @@ end
 local function replyToListRequest(sender, id, revision)
     local request = guildRequests[sender]
     local member = request and currentMember(sender, request.identity)
-    if not request or request.id ~= id or not member or not member.online or request.scope ~= guildScope()
+    if not request or request.id ~= id or not member or request.scope ~= guildScope()
         or GetTime() - request.at >= requestLifetime then
         return false, L("listRequestExpired")
     end
@@ -578,11 +583,11 @@ local function replyToListRequest(sender, id, revision)
     return true, L("transferStarted", member.name)
 end
 
-local function receiveListRequest(sender, id)
-    local member, scope, now = roster[sender], guildScope(), GetTime()
+local function receiveListRequest(sender, member, id, qualified)
+    local scope, now = guildScope(), GetTime()
     local request = guildRequests[sender]
-    if not member.online or (request and request.scope == scope
-        and (request.id == id or now - request.at < requestCooldown)) then return end
+    if request and request.scope == scope
+        and (request.id == id or now - request.at < requestCooldown) then return end
 
     for key, previous in pairs(guildRequests) do
         if now - previous.at >= requestLifetime or previous.scope ~= scope then guildRequests[key] = nil end
@@ -592,8 +597,9 @@ local function receiveListRequest(sender, id)
     local function offerReply()
         local link = ("|Haddon:GuildAvengerPull:%s:%s|h[%s]|h"):format(id, sender, L("replyToListRequest"))
         addon.Say(L("guildmateRequestedList", member.name, link))
+        addon.NotifyWatchlistRequest(member.name)
     end
-    if addon.AutoReplyEnabled() then
+    if qualified and addon.AutoReplyEnabled() then
         local revision = autoReplyRevision
         C_Timer.After(math.random(5, 30) / 10, function()
             if guildScope() ~= scope or guildRequests[sender] ~= request or request.sent
@@ -604,6 +610,50 @@ local function receiveListRequest(sender, id)
     else
         offerReply()
     end
+end
+
+local function handleGuildRequest(raw, id)
+    local key, _, suffix, qualified = rosterName(raw)
+    if not key or key == addon.UnitName("player") then return true end
+    local member = guildMember(key)
+    if not member then return false end
+    if qualified and member.suffix ~= suffix then return true end
+    member = currentMember(key, member.identity)
+    if not member then return false end
+    -- Guild broadcasts can show a bare name. A unique roster match can show a
+    -- prompt, while an address mismatch must never trigger an automatic reply.
+    receiveListRequest(key, member, id, member.suffix == suffix)
+    return true
+end
+
+drainGuildRequests = function()
+    if not next(pendingGuildRequests) then return end
+    local waiting = pendingGuildRequests
+    pendingGuildRequests = {}
+    local scope, now = guildScope(), GetTime()
+    for raw, request in pairs(waiting) do
+        if request.scope == scope and now - request.at < rosterWait and not handleGuildRequest(raw, request.id) then
+            pendingGuildRequests[raw] = request
+        end
+    end
+end
+
+local function queueGuildRequest(raw, id)
+    if handleGuildRequest(raw, id) then return end
+    local scope, now = guildScope(), GetTime()
+    if not scope then return end
+    local count = 0
+    for name, request in pairs(pendingGuildRequests) do
+        if request.scope ~= scope or now - request.at >= rosterWait then
+            pendingGuildRequests[name] = nil
+        else
+            count = count + 1
+        end
+    end
+    if pendingGuildRequests[raw] or count >= maxPendingRequests then return end
+    pendingGuildRequests[raw] = {id = id, scope = scope, at = now}
+    addon.ReadRoster()
+    if next(pendingGuildRequests) then addon.RefreshRoster() end
 end
 
 function addon.Publish(selection, includeRemovals)
@@ -765,15 +815,13 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         or not addon.IsText(message) or #message > 240 or not addon.UpdateScope() then
         return
     end
-    local sender, _, identity = addon.GuildSender(senderName)
-    if not sender or sender == addon.UnitName("player") then
-        return
-    end
     if channel == "GUILD" then
         local id = message:match("^P\t([%da-f]+%.[%da-f]+)$")
-        if id and #id <= 16 then receiveListRequest(sender, id) end
+        if id and #id <= 16 then queueGuildRequest(senderName, id) end
         return
     end
+    local sender, _, identity = addon.GuildSender(senderName)
+    if not sender or sender == addon.UnitName("player") then return end
     local requestID = message:match("^Q\t([%da-f]+%.[%da-f]+)$")
     if requestID then
         local offer, now = published[requestID], GetTime()
@@ -820,7 +868,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         local number, pullID = data:match("^(%d+)\t([%da-f]+%.[%da-f]+)$")
         local owner = pullID and requestedLists[pullID]
         if pullID and (not owner or owner.scope ~= guildScope()
-            or now - owner.at >= requestLifetime or owner.received[sender] or not roster[sender].online) then
+            or now - owner.at >= requestLifetime or owner.received[sender]) then
             return
         end
         local count = tonumber(number or data:match("^%d+$"))
@@ -927,8 +975,6 @@ function addon.InitSync()
     GuildAvengerDB.replyToListRequests = nil
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
     local addFilter = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter or ChatFrame_AddMessageEventFilter
-    if addFilter and EventRegistry then
-        addFilter("CHAT_MSG_GUILD", chatFilter)
-        EventRegistry:RegisterCallback("SetItemRef", requestLink)
-    end
+    if addFilter then addFilter("CHAT_MSG_GUILD", chatFilter) end
+    if EventRegistry then EventRegistry:RegisterCallback("SetItemRef", requestLink) end
 end

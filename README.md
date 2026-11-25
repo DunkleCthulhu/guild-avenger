@@ -87,6 +87,8 @@ When the recipient supports it, Guild Avenger packs several entries into one mes
 
 In 3.3.1, automatic replies are off until you apply permission for the current character and guild. The previous account-wide permission is reset on upgrade. **Cancel** discards settings changes. Applying a change that turns automatic replies off also stops queued replies. Shared records include notes, authors, dates added, and death counts.
 
+When a request needs a manual reply, the addon shows a brief on-screen notice and adds **Send my watchlist** to your chat.
+
 ## Guild sightings
 
 Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.
