@@ -253,10 +253,10 @@ currentMember = function(key, identity)
     if member and member.identity == identity then return member end
 end
 
-function addon.GuildSender(raw)
-    local key, _, suffix = rosterName(raw)
+function addon.GuildSender(raw, guildBroadcast)
+    local key, _, suffix, qualified = rosterName(raw)
     local member = guildMember(key)
-    if member and member.suffix == suffix and currentMember(key, member.identity) then
+    if member and (member.suffix == suffix or (guildBroadcast and not qualified)) and currentMember(key, member.identity) then
         return key, member.name, member.identity
     end
 end

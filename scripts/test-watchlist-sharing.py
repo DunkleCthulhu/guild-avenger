@@ -163,9 +163,9 @@ UIErrorsFrame = { AddMessage=function(_,text) table.insert(notices,text) end }
 C_Timer = {
     After=function(delay, callback) table.insert(jobs, {due=mockTime+delay, callback=callback}) end,
     NewTicker=function(seconds, callback)
-        -- Only run the transfer timer. Patrol and statistics timers are outside these tests.
+        -- Only run transfer and map timers. Patrol and statistics are outside these tests.
         local ticker = {due=mockTime+seconds, interval=seconds, callback=callback, Cancel=function(self) self.cancelled=true end}
-        if seconds == 0.25 then table.insert(jobs, ticker) end
+        if seconds == 0.25 or seconds == 5 then table.insert(jobs, ticker) end
         return ticker
     end
 }
@@ -187,6 +187,101 @@ function CreateFrame(...)
     return frame
 end
 function fire(event, ...) return run(eventFrame, "OnEvent", event, ...) end
+
+function loadWorldMap()
+    currentZone, observerX, observerY, insideInstance = 71, 0.4, 0.6, false
+    local mapInfo = {
+        [71]={name="Tanaris", parentMapID=12},
+        [12]={name="Kalimdor", parentMapID=947},
+        [947]={name="Azeroth", parentMapID=0},
+        [37]={name="Elwynn Forest", parentMapID=13},
+        [13]={name="Eastern Kingdoms", parentMapID=947},
+    }
+    C_Map = {
+        GetMapInfo=function(id) return mapInfo[id] end,
+        GetBestMapForUnit=function(unit) assert(unit == "player"); return currentZone end,
+        GetPlayerMapPosition=function(mapID, unit)
+            assert(unit == "player" and mapID == currentZone)
+            return {GetXY=function() return observerX, observerY end}
+        end,
+        GetMapRectOnMap=function(id, parent)
+            assert(mapInfo[id].parentMapID == parent)
+            if id == 71 then return 0.4, 0.6, 0.7, 0.9 end
+            if id == 12 then return 0.1, 0.4, 0.1, 0.8 end
+        end,
+    }
+    IsInInstance = function() return insideInstance end
+    GetRealZoneText = function() return mapInfo[currentZone].name end
+    GetSubZoneText = function() return "Gadgetzan" end
+    MapCanvasDataProviderMixin = {
+        GetMap=function(self) return self.map end,
+        OnMapChanged=function(self) self:RefreshAllData() end,
+    }
+    MapCanvasPinMixin = {
+        SetPosition=function(self,x,y) self.x, self.y = x,y end,
+        UseFrameLevelType=noop,
+        OnReleased=noop,
+    }
+    GameTooltip = {
+        SetOwner=function(self, owner) self.owner, self.lines = owner, {} end,
+        IsOwned=function(self, owner) return self.owner == owner end,
+        SetText=function(self, text) table.insert(self.lines, text) end,
+        AddLine=function(self, text) table.insert(self.lines, text) end,
+        Show=noop, Hide=noop,
+    }
+    CreateFromMixins = function(mixin)
+        local out = {}
+        for key, value in pairs(mixin) do out[key] = value end
+        return out
+    end
+    WorldMapFrame = {pins={}, mapID=currentZone, shown=false}
+    local map = WorldMapFrame
+    function map:AddDataProvider(provider) self.provider, provider.map = provider, self end
+    function map:GetMapID() return self.mapID end
+    function map:IsShown() return self.shown end
+    function map:SetMapID(id)
+        self.mapID = id
+        self.provider:OnMapChanged()
+    end
+    function map:Show()
+        self.shown = true
+        self.provider:RefreshAllData()
+        self.provider:OnShow()
+    end
+    function map:Hide()
+        self.shown = false
+        self.provider:OnHide()
+    end
+    function map:AcquirePin(template, ...)
+        assert(template == "GuildAvengerSightingPinTemplate")
+        local pin = CreateFromMixins(GuildAvengerSightingPinMixin)
+        pin.Icon = {SetVertexColor=noop}
+        pin:OnLoad()
+        pin:OnAcquired(...)
+        self.pins[pin.place.name] = pin
+        return pin
+    end
+    function map:RemovePin(pin)
+        self.pins[pin.place.name] = nil
+        pin:OnReleased()
+    end
+    function map:RemoveAllPinsByTemplate()
+        for _, pin in pairs(self.pins) do self:RemovePin(pin) end
+    end
+    fire("ADDON_LOADED", "Blizzard_WorldMap")
+    return map
+end
+
+function selectEnemy()
+    local originalName, originalFaction, originalGuild = UnitName, UnitFactionGroup, GetGuildInfo
+    UnitName = function(unit) if unit == "target" then return "Enemy Player" end; return originalName(unit) end
+    UnitFactionGroup = function(unit) if unit == "target" then return "Alliance" end; return originalFaction(unit) end
+    GetGuildInfo = function(unit) if unit == "target" then return "Enemy Guild" end; return originalGuild(unit) end
+    UnitIsPlayer = function(unit) return unit == "target" end
+    UnitCanAttack = function(_,unit) return unit == "target" end
+    UnitInParty, UnitInRaid = blank, blank
+    fire("PLAYER_TARGET_CHANGED")
+end
 """
 
 
@@ -266,7 +361,7 @@ class Wire:
             err = self.error(sender, msg)
             if err:
                 return err
-        if prefix == PREFIX:
+        if prefix in (PREFIX, "GuildAvSeen1"):
             assert len(msg.encode()) <= 240
             self.packets.append((sender.name, msg, channel, address, self.time))
         if prefix is None:
@@ -537,6 +632,82 @@ class SharingTests(unittest.TestCase):
         self.assertFalse(any(msg.startswith("M\t") for _, msg, _, _, _ in self.wire.packets))
         preview.accept(self.anna.lua.table_from({key: preview.changes[1].record}))
         self.assertEqual(self.anna.read(key).deaths, 3)
+
+    def test_local_map_sighting_projects_and_expires(self):
+        addon, frames = self.anna.addon, self.anna.g
+        addon.ShowAlert = self.anna.lua.eval("function() end")
+        map_frame = frames.loadWorldMap()
+        key = self.anna.add("Enemy Player", kind="P", high=True)
+        frames.selectEnemy()
+        self.assertEqual(len(self.wire.packets), 0)
+        map_frame.Show(map_frame)
+        pin = map_frame.pins["Enemy Player"]
+        self.assertAlmostEqual(pin.x, 0.4)
+        self.assertAlmostEqual(pin.y, 0.6)
+        self.assertTrue(pin.priority)
+        pin.OnMouseEnter(pin)
+        self.assertIn("Enemy Guild", frames.GameTooltip.lines[2])
+        self.assertIn("Seen by you", frames.GameTooltip.lines[4])
+        map_frame.SetMapID(map_frame, 947)
+        world_pin = map_frame.pins["Enemy Player"]
+        self.assertAlmostEqual(world_pin.x, 0.244)
+        self.assertAlmostEqual(world_pin.y, 0.674)
+        map_frame.SetMapID(map_frame, 37)
+        self.assertIsNone(map_frame.pins["Enemy Player"])
+        map_frame.SetMapID(map_frame, 71)
+        self.wire.advance(900)
+        self.assertIsNone(map_frame.pins["Enemy Player"])
+        map_frame.Hide(map_frame)
+        frames.insideInstance = True
+        addon.RecordLocalMapSighting(key, "Enemy Player", "Enemy Guild")
+        map_frame.Show(map_frame)
+        self.assertIsNone(map_frame.pins["Enemy Player"])
+
+    def test_guild_map_sighting_requires_consent_and_eligible_target(self):
+        sender = self.anna
+        receiver = self.bohdan
+        sender.addon.ShowAlert = sender.lua.eval("function() end")
+        sender.g.loadWorldMap()
+        map_frame = receiver.g.loadWorldMap()
+        map_frame.Show(map_frame)
+        sender.add("Enemy Player", kind="P")
+        receiver.add("Enemy Guild", high=True)
+        self.wire.bare_guild_sender = True
+        sender.addon.SetSightingSetting("send", True)
+        sender.g.selectEnemy()
+        self.wire.flush()
+        self.assertEqual(len(self.wire.packets), 2)
+        self.assertIsNone(map_frame.pins["Enemy Player"])
+        receiver.addon.SetSightingSetting("receive", True)
+        self.wire.advance(61)
+        sender.g.observerX = 0.55
+        sender.g.fire("PLAYER_TARGET_CHANGED")
+        self.wire.flush()
+        pin = map_frame.pins["Enemy Player"]
+        self.assertEqual(pin.place.reporter, sender.name)
+        self.assertAlmostEqual(pin.x, 0.55)
+        self.assertTrue(pin.priority)
+        self.assertEqual(len(receiver.g.chat), 1)
+        invalid = [
+            ("M\tP\tOther Player\tEnemy Guild\t71\t101\t33", "GUILD", sender.address),
+            ("M\tP\tOther Player\tEnemy Guild\t71\t40\t33", "WHISPER", sender.address),
+            ("M\tP\tOther Player\tEnemy Guild\t71\t40\t33", "GUILD", "Anna Wolf-WrongLayer"),
+            ("M\tP\tOther Player\tUnlisted Guild\t71\t40\t33", "GUILD", sender.address),
+        ]
+        for message, channel, origin in invalid:
+            receiver.g.fire("CHAT_MSG_ADDON", "GuildAvSeen1", message, channel, origin)
+        self.assertIsNone(map_frame.pins["Other Player"])
+        self.wire.advance(61)
+        sender.g.observerX = 0.77
+        sender.g.fire("PLAYER_TARGET_CHANGED")
+        self.wire.flush()
+        self.assertAlmostEqual(map_frame.pins["Enemy Player"].x, 0.77)
+        receiver.addon.SetSightingSetting("receive", False)
+        self.assertIsNone(map_frame.pins["Enemy Player"])
+        receiver.addon.SetSightingSetting("receive", True)
+        receiver.g.club = 99
+        receiver.g.fire("PLAYER_GUILD_UPDATE")
+        self.assertIsNone(map_frame.pins["Enemy Player"])
 
 
 if __name__ == "__main__":

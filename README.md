@@ -96,11 +96,13 @@ In 3.4.2, open **Requests → Request guild watchlists** to ask the guild. If a 
 Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.
 
 - **Report enemies I meet to the guild** sends a hidden addon message to the guild when you get a new alert. It contains the enemy's name, their guild name when the addon can see it, your zone and subzone, and your map coordinates rounded to whole percent. Nothing is sent from dungeons, battlegrounds, or arenas. You report the same enemy at most once a minute, at most one enemy every 5 seconds, and not at all for a minute after a guildmate reported that enemy.
-- **Show guildmates' sightings in my chat** prints a line in your own chat frame, visible only to you. You see sightings only for enemies on your own watchlist or members of guilds on it, with your own note and priority, and at most once a minute per enemy. Reports are accepted only from members of your guild roster.
+- **Show guild sightings in chat and on the map** shows sightings for targets on your watchlist or members of guilds on it. Chat uses your own note and priority and displays at most one message per minute per enemy. Reports are accepted only from members of your guild roster.
 - **Also show a popup with sound** shows the alert window for these sightings too.
 - **Share sighting** (**Поділитися зустріччю**) on a local alert posts the enemy and your current location in guild chat when clicked outside an instance.
 
 Guildmates on versions before 3.4.0 neither send nor receive sightings.
+
+Starting in 3.4.4, the world map shows **Seen here** markers for the last 15 minutes of your own encounters, plus reports from guildmates on 3.4.4 or later if you enabled receiving them. Hover over a marker for the character, guild, age and observer. The marker uses the observer's location at the time of the encounter.
 
 ## Statistics
 

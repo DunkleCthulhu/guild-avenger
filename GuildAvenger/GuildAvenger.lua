@@ -331,11 +331,11 @@ local function watchedGuild(key)
 end
 
 local function matchGuild(unit, key, faction, guid)
-    local guildKey = guildName((GetGuildInfo(unit)))
+    local guildKey, name = guildName((GetGuildInfo(unit)))
     if guid and guildKey then
         observedGuilds[guid] = { guild = guildKey, player = key, faction = faction, at = GetTime() }
     end
-    return watchedGuild(guildKey), guildKey
+    return watchedGuild(guildKey), guildKey, name
 end
 
 function addon.HonorTarget(victim)
@@ -449,7 +449,7 @@ local function scanUnit(unit, alreadySeen)
         return false
     end
     local personal = trackedPlayer(key, name, faction, guid)
-    local guild, guildKey = matchGuild(unit, key, faction, guid)
+    local guild, guildKey, enemyGuild = matchGuild(unit, key, faction, guid)
     local entry = personal or guild
     if not entry then
         return false
@@ -460,10 +460,10 @@ local function scanUnit(unit, alreadySeen)
     local guildSeen = sighting(guild, now, zone)
     if personalSeen or guildSeen then addon.RefreshUI() end
     if key ~= alreadySeen and startAlert(key) then
+        addon.RecordLocalMapSighting(key, name, enemyGuild)
         -- Every new alert may be reported to the guild, whether it is shown alone or in a group.
         -- The enemy's guild lets guildmates who list only that guild see the report.
-        local enemyGuild = entry.kind == "G" and entry.name or clean((GetGuildInfo(unit)), nameLimit)
-        addon.ReportSighting(key, entry, name, enemyGuild ~= "" and enemyGuild or nil)
+        addon.ReportSighting(key, entry, name, enemyGuild)
         if not personal and not entry.high then
             groupGuildAlert(guildKey, entry, name, unit, guid)
         else
@@ -947,6 +947,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.InitStats()
         addon.InitSeason()
         addon.InitSightings()
+        addon.InitSightingMap()
         addon.InitMenus()
         SLASH_GUILDAVENGER1 = "/gavenger"
         SlashCmdList.GUILDAVENGER = slash
@@ -958,6 +959,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.RefreshUI()
         addon.RefreshSettingsGuild()
         if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
+        addon.RefreshSightingMap()
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
         addon.SeasonRosterReady()
@@ -1021,6 +1023,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.ReceiveSighting(...)
     elseif event == "ADDON_LOADED" then
         addon.InitMenus()
+        if (...) == "Blizzard_WorldMap" then addon.InitSightingMap() end
     end
 end)
 

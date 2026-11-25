@@ -1,0 +1,11 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Frame name="GuildAvengerSightingPinTemplate" virtual="true" enableMouseMotion="true"
+           mixin="GuildAvengerSightingPinMixin">
+        <Size x="19" y="19"/>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture parentKey="Icon" file="Interface\TargetingFrame\UI-RaidTargetingIcon_8" setAllPoints="true"/>
+            </Layer>
+        </Layers>
+    </Frame>
+</Ui>

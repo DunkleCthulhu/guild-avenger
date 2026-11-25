@@ -32,6 +32,7 @@ function addon.SetSightingSetting(name, value)
     local guild = guilds[scope]
     guild[identity] = guild[identity] or {}
     guild[identity][name] = value and true or nil
+    if name == "receive" then addon.RefreshSightingMap() end
 end
 
 local function inInstance()
@@ -49,10 +50,10 @@ end
 -- The player's zone, subzone and map position in whole percent.
 local function ownPlace()
     local place = {}
-    addon.Location(place)
+    local mapID = addon.Location(place)
     local x = place.x and math.floor(place.x * 100 + 0.5)
     local y = place.y and math.floor(place.y * 100 + 0.5)
-    return place.zone or "", place.area or "", x, y
+    return place.zone or "", place.area or "", x, y, mapID
 end
 
 local function placeText(zone, area, x, y)
@@ -69,7 +70,7 @@ function addon.ReportSighting(key, entry, name, guild)
     if recently(sent, key, now) or recently(heard, key, now) or (lastSent and now - lastSent < sendInterval) then
         return
     end
-    local zone, area, x, y = ownPlace()
+    local zone, area, x, y, mapID = ownPlace()
     local kind = entry.kind == "G" and "G" or "P"
     local function compose(subzone)
         return ("S\t%s\t%s\t%s\t%s\t%s\t%s\t%s"):format(kind, name, guild or "",
@@ -80,6 +81,11 @@ function addon.ReportSighting(key, entry, name, guild)
     if #message > messageLimit then return end
     if C_ChatInfo.SendAddonMessage(prefix, message, "GUILD") == Enum.SendAddonMessageResult.Success then
         sent[key], lastSent = now, now
+        -- Older clients still receive S. M adds a language-independent map ID.
+        if mapID and x and y then
+            local mapMessage = ("M\t%s\t%s\t%s\t%d\t%d\t%d"):format(kind, name, guild or "", mapID, x, y)
+            if #mapMessage <= messageLimit then C_ChatInfo.SendAddonMessage(prefix, mapMessage, "GUILD") end
+        end
     end
 end
 
@@ -88,8 +94,19 @@ function addon.ReceiveSighting(receivedPrefix, message, channel, sender)
         or not addon.IsText(message) or #message > messageLimit then return end
     local settings = settingsFor(addon.GuildPrivacyIdentity())
     if not settings or not settings.receive then return end
-    local reporterKey, reporter = addon.GuildSender(sender)
+    local reporterKey, reporter = addon.GuildSender(sender, true)
     if not reporterKey or reporterKey == addon.UnitName("player") then return end
+    local mapKind, mapName, mapGuild, mapID, mapX, mapY =
+        message:match("^M\t([PG])\t([^\t]+)\t([^\t]*)\t(%d+)\t(%d+)\t(%d+)$")
+    if mapKind then
+        if #mapID > 10 or #mapX > 3 or #mapY > 3 then return end
+        local key, name = addon.PlayerName(mapName)
+        local guild = mapGuild ~= "" and mapGuild or nil
+        if key and (not guild or addon.EntryName(guild, "G")) and addon.ListedEntry(key, guild) then
+            addon.RecordGuildMapSighting(key, name, guild, reporter, tonumber(mapID), tonumber(mapX) / 100, tonumber(mapY) / 100)
+        end
+        return
+    end
     local kind, name, guild, x, y, zone, area =
         message:match("^S\t([PG])\t([^\t]+)\t([^\t]*)\t(%d*)\t(%d*)\t([^\t]*)\t([^\t]*)$")
     if not kind or #x > 3 or #y > 3 then return end

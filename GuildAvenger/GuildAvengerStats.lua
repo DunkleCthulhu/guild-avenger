@@ -131,6 +131,7 @@ local function location(entry)
     local x, y = position:GetXY()
     if isNumber(x) and isNumber(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (x > 0 or y > 0) then
         entry.x, entry.y = x, y
+        return mapID
     end
 end
 
