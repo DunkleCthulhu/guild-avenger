@@ -14,6 +14,8 @@ Open **Settings → Report a bug**, describe what happened, and click **Send**. 
 
 Extract the Guild Avenger release ZIP into `World of Warcraft/_forever_/Interface/AddOns/`. The addon appears in the addon menu as **Guild Avenger**. Type `/gavenger` or click the book icon beside the minimap. Drag the icon to move it around the minimap. [GitHub releases](https://github.com/DunkleCthulhu/guild-avenger/releases)
 
+Drag an addon window by its title bar. Requests, settings, and other dialogs open in front of the main watchlist.
+
 ### Interface language
 
 Open **Settings** (**Налаштування**) in the watchlist or type `/gavenger settings`. Choose English or Ukrainian, click **Apply** (**Застосувати**), then type `/reload` in the WoW chat to update all addon windows. Your choice is saved between sessions.

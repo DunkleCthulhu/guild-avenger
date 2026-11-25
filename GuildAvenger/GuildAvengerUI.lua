@@ -9,6 +9,7 @@ local bookIcon = "Interface\\Icons\\INV_Misc_Book_11"
 
 local color = {
     border = { 0.36, 0.29, 0.18, 1 },
+    window = { 0.075, 0.061, 0.048, 1 },
     panel = { 0.11, 0.095, 0.073, 0.98 },
     inset = { 0.059, 0.052, 0.04, 1 },
     button = { 0.20, 0.13, 0.14, 1 },
@@ -90,22 +91,49 @@ local windowBackdrop = {
     insets = { left = 5, right = 5, top = 5, bottom = 5 },
 }
 
-local function window(name, width, height, strata)
+local function window(name, width, height, strata, titleWidth)
     local root = CreateFrame("Frame", name, UIParent, "BackdropTemplate")
     root:Hide()
     root:SetPoint("CENTER")
     root:SetSize(width, height)
-    root:SetFrameStrata(strata)
+    root:SetFrameStrata(strata or "FULLSCREEN_DIALOG")
     root:SetClampedToScreen(true)
+    root:SetMovable(true)
     root:EnableMouse(true)
     root:SetBackdrop(windowBackdrop)
-    return root
+    if titleWidth == 0 then return root end
+
+    fill(root, color.window, 5, -8)
+    root:SetToplevel(true)
+    local header = CreateFrame("Frame", nil, root)
+    header:SetPoint("TOPLEFT", 18, -10)
+    header:SetSize(titleWidth or width - 46, 32)
+    header:EnableMouse(true)
+    header:RegisterForDrag("LeftButton")
+    local moving = false
+    local function stopMoving()
+        if not moving then return end
+        root:StopMovingOrSizing()
+        moving = false
+    end
+    header:SetScript("OnDragStart", function()
+        root:Raise()
+        root:StartMoving()
+        moving = true
+    end)
+    header:SetScript("OnDragStop", stopMoving)
+    root:HookScript("OnHide", stopMoving)
+    return root, header
+end
+
+local function showWindow(root)
+    root:Show()
+    root:Raise()
 end
 
 local function showTextWindow(text, title)
     if not commentWindow then
-        local root = window("GuildAvengerComment", 500, 200, "FULLSCREEN_DIALOG")
-        root:SetFrameLevel(32)
+        local root = window("GuildAvengerComment", 500, 200)
         tinsert(UISpecialFrames, "GuildAvengerComment")
         root.title = label(root, "GameFontNormalLarge", color.gold)
         root.title:SetPoint("TOPLEFT", 20, -16)
@@ -123,7 +151,7 @@ local function showTextWindow(text, title)
     end
     commentWindow.title:SetText(title or L("note"))
     commentWindow.text:SetText(text)
-    commentWindow:Show()
+    showWindow(commentWindow)
 end
 
 local function commentPreview(parent, text, width, lines, fullText)
@@ -281,7 +309,7 @@ end
 
 function addon.OpenWatchlistRequests()
     if not requestsWindow then
-        local root = window("GuildAvengerRequests", 520, 309, "DIALOG")
+        local root = window("GuildAvengerRequests", 520, 309)
         tinsert(UISpecialFrames, "GuildAvengerRequests")
         label(root, "GameFontNormalLarge", color.gold, L("watchlistRequestsTitle")):SetPoint("TOPLEFT", 19, -18)
         local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
@@ -365,8 +393,7 @@ function addon.OpenWatchlistRequests()
         end)
         requestsWindow = root
     end
-    requestsWindow:Show()
-    requestsWindow:Raise()
+    showWindow(requestsWindow)
 end
 
 function addon.WatchlistReplyStatus(success, message)
@@ -496,7 +523,7 @@ end
 
 function addon.PromptSounds()
     if not soundWindow then
-        local root = window("GuildAvengerSounds", 436, 247, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSounds", 436, 247)
         tinsert(UISpecialFrames, "GuildAvengerSounds")
         label(root, "GameFontNormalLarge", color.gold, L("soundTitle")):SetPoint("TOPLEFT", 20, -17)
         soundPicker(root, -51, false)
@@ -507,7 +534,7 @@ function addon.PromptSounds()
         button(root, L("done"), 90, function() root:Hide() end):SetPoint("BOTTOMRIGHT", -19, 15)
         soundWindow = root
     end
-    soundWindow:Show()
+    showWindow(soundWindow)
 end
 
 local alertDurations = { 6, 12, 20, 30 }
@@ -527,7 +554,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 563, "FULLSCREEN_DIALOG")
+        local root = window("GuildAvengerSettings", 430, 563)
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -688,7 +715,7 @@ function addon.PromptSettings()
         end)
         settingsWindow = root
     end
-    settingsWindow:Show()
+    showWindow(settingsWindow)
 end
 
 local function createFilters(root)
@@ -745,17 +772,9 @@ local function createFilters(root)
 end
 
 local function createPanel()
-    local root = window("GuildAvengerPanel", 662, 648, "DIALOG")
-    root:SetMovable(true)
+    local root, header = window("GuildAvengerPanel", 662, 648, "DIALOG", 178)
     root.rows, root.entries, root.selected = {}, {}, {}
     tinsert(UISpecialFrames, "GuildAvengerPanel")
-    local header = CreateFrame("Frame", nil, root)
-    header:SetPoint("TOPLEFT", 20, -12)
-    header:SetSize(178, 34)
-    header:EnableMouse(true)
-    header:RegisterForDrag("LeftButton")
-    header:SetScript("OnDragStart", function() root:StartMoving() end)
-    header:SetScript("OnDragStop", function() root:StopMovingOrSizing() end)
     local icon = header:CreateTexture(nil, "ARTWORK")
     icon:SetSize(22, 22)
     icon:SetPoint("LEFT")
@@ -957,7 +976,7 @@ function addon.ToggleUI()
         return
     end
     addon.UpdateScope()
-    panel:Show()
+    showWindow(panel)
     if not panel.editing and not manualName() then
         putTarget()
     end
@@ -1031,7 +1050,7 @@ function addon.RefreshStats()
 end
 
 local function createStats()
-    local root = window("GuildAvengerStats", 540, 596, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerStats", 540, 596)
     root.page, root.rows, root.Tabs = 1, {}, {}
     root.minTabWidth = 100
     tinsert(UISpecialFrames, "GuildAvengerStats")
@@ -1146,7 +1165,7 @@ end
 
 function addon.OpenStats()
     if not statsWindow then statsWindow = createStats() end
-    statsWindow:Show()
+    showWindow(statsWindow)
     addon.RefreshRoster()
     addon.RefreshStats()
 end
@@ -1222,8 +1241,7 @@ end
 
 local function promptLink(url, title, description)
     if not download then
-        local root = window("GuildAvengerDownload", 520, 158, "FULLSCREEN_DIALOG")
-        root:SetFrameLevel(30)
+        local root = window("GuildAvengerDownload", 520, 158)
         tinsert(UISpecialFrames, "GuildAvengerDownload")
         root.title = label(root, "GameFontNormalLarge", color.gold)
         root.title:SetPoint("TOPLEFT", 18, -15)
@@ -1247,7 +1265,7 @@ local function promptLink(url, title, description)
     download.description:SetText(description)
     download.field:SetMaxBytes(#url)
     download.field:SetText(url)
-    download:Show()
+    showWindow(download)
     download.field:SetFocus()
     download.field:HighlightText()
 end
@@ -1264,8 +1282,7 @@ end
 
 function addon.PromptBugReport()
     if not bugReport then
-        local root = window("GuildAvengerBugReport", 520, 270, "FULLSCREEN_DIALOG")
-        root:SetFrameLevel(31)
+        local root = window("GuildAvengerBugReport", 520, 270)
         tinsert(UISpecialFrames, "GuildAvengerBugReport")
         label(root, "GameFontNormalLarge", color.gold, L("reportBug")):SetPoint("TOPLEFT", 18, -15)
         local instructions = label(root, "GameFontHighlight", color.white, L("bugReportHint"))
@@ -1318,7 +1335,7 @@ function addon.PromptBugReport()
         enabled(send, false)
         bugReport = root
     end
-    bugReport:Show()
+    showWindow(bugReport)
     bugReport.field:SetFocus()
 end
 
@@ -1350,7 +1367,7 @@ local function submitDialog()
 end
 
 local function createDialog()
-    local root = window("GuildAvengerDialog", 428, 190, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerDialog", 428, 190)
     tinsert(UISpecialFrames, "GuildAvengerDialog")
     root.title = label(root, "GameFontNormalLarge", color.gold)
     root.title:SetPoint("TOPLEFT", 18, -15)
@@ -1439,7 +1456,7 @@ local function openDialog(options)
     status(dialog.status, true, "")
     dialog.action = options.action
     dialog.publishAction = options.publishAction
-    dialog:Show()
+    showWindow(dialog)
     addon.RefreshSuggestions()
     if options.limit then
         dialog.field:SetFocus()
@@ -1629,7 +1646,7 @@ local function selectAll(value, additionsAndCountsOnly)
 end
 
 local function createReview()
-    local root = window("GuildAvengerReview", 516, 560, "FULLSCREEN_DIALOG")
+    local root = window("GuildAvengerReview", 516, 560)
     local reviewRowHeight = 52
     root.rows = {}
     tinsert(UISpecialFrames, "GuildAvengerReview")
@@ -1781,7 +1798,7 @@ local function showReview(offer)
     review.scroll:SetValue(0)
     review.scroll:SetShown(maximum > 0)
     selectAll(true, true)
-    review:Show()
+    showWindow(review)
 end
 
 presentOffer = function()
@@ -1946,11 +1963,10 @@ local function positionAlert(root)
 end
 
 local function createAlert()
-    local root = window("GuildAvengerAlert", alertWidth, alertHeight, "HIGH")
+    local root = window("GuildAvengerAlert", alertWidth, alertHeight, "HIGH", 0)
     positionAlert(root)
     root:SetAlpha(alertAlpha)
     root:SetBackdropColor(0.40, 0.34, 0.28, 0.98)
-    root:SetMovable(true)
     root:RegisterForDrag("LeftButton")
     root:SetScript("OnDragStart", function(self)
         alertMoving = true

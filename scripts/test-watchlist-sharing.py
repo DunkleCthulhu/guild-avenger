@@ -19,12 +19,15 @@ WOW = r"""
 local function noop() end
 local function run(frame, event, ...)
     local script = frame.scripts[event]
-    if script then return script(frame, ...) end
+    if script then script(frame, ...) end
+    local hook = frame.hooks[event]
+    if hook then hook(frame, ...) end
 end
 local methods = {}
+local topLevel = 0
 local function widget(kind, name, parent)
     local frame = setmetatable({
-        kind=kind, scripts={}, shown=true, enabled=true, text="", value=0, children={}
+        kind=kind, scripts={}, hooks={}, shown=true, enabled=true, text="", value=0, children={}
     }, {__index=methods})
     if name then _G[name] = frame end
     if parent then table.insert(parent.children, frame) end
@@ -32,7 +35,33 @@ local function widget(kind, name, parent)
 end
 function CreateFrame(kind, name, parent) return widget(kind, name, parent) end
 function methods:SetScript(event, script) self.scripts[event] = script end
-function methods:CreateTexture() return widget("Texture", nil, self) end
+function methods:HookScript(event, script) self.hooks[event] = script end
+function methods:CreateTexture(_, _, _, depth)
+    local texture = widget("Texture", nil, self)
+    texture.depth = depth
+    return texture
+end
+function methods:SetColorTexture(_, _, _, alpha) self.alpha = alpha end
+function methods:SetFrameStrata(strata) self.strata = strata end
+function methods:SetMovable(movable) self.movable = movable end
+function methods:SetToplevel(toplevel) self.toplevel = toplevel end
+function methods:Raise()
+    topLevel = topLevel + 1
+    self.level = topLevel
+end
+function methods:RegisterForDrag(button) self.dragButton = button end
+function methods:StartMoving()
+    assert(self.movable)
+    self.moving = true
+end
+function methods:StopMovingOrSizing() self.moving = false end
+function methods:SetupMenu(generator) self.menuGenerator = generator end
+function methods:GenerateMenu()
+    self.menu = {}
+    self.menuGenerator(self, {CreateRadio=function(_, text, _, select, value)
+        self.menu[text] = function() select(value) end
+    end})
+end
 function methods:CreateFontString() return widget("FontString", nil, self) end
 function methods:GetFontString()
     if not self.font then self.font = self:CreateFontString() end
@@ -64,12 +93,12 @@ function methods:GetValue() return self.value end
 function methods:SetID(id) self.id = id end
 function methods:GetID() return self.id end
 for name in ([[
-    SetPoint SetSize SetColorTexture SetTextColor SetWidth SetHeight SetMaxLines SetJustifyH SetJustifyV
+    SetPoint SetSize SetTextColor SetWidth SetHeight SetMaxLines SetJustifyH SetJustifyV
     SetWordWrap SetNonSpaceWrap SetAlpha SetFontObject SetAutoFocus SetMaxBytes SetTextInsets EnableMouse
-    ClearFocus SetBackdrop SetFrameStrata SetClampedToScreen RegisterEvent SetFrameLevel SetMouseClickEnabled
-    SetTexture SetTexCoord SetMovable RegisterForDrag SetNormalTexture SetPressedTexture SetHighlightTexture SetAllPoints
-    SetOrientation SetValueStep SetObeyStepOnDrag SetMinMaxValues SetThumbTexture EnableMouseWheel Raise
-    SetJustifyH SetFocus HighlightText
+    ClearFocus SetBackdrop SetClampedToScreen RegisterEvent SetFrameLevel SetMouseClickEnabled
+    SetTexture SetTexCoord SetNormalTexture SetPressedTexture SetHighlightTexture SetAllPoints
+    SetOrientation SetValueStep SetObeyStepOnDrag SetMinMaxValues SetThumbTexture EnableMouseWheel
+    SetFocus HighlightText SetMultiLine SetScrollChild ClearAllPoints
 ]]):gmatch("%S+") do methods[name] = noop end
 local function findButton(frame, text)
     if not frame:IsShown() then return end
@@ -89,6 +118,7 @@ function hasButton(window, text)
 end
 UIParent = widget("Frame")
 UISpecialFrames, SlashCmdList, PanelTemplates_SetNumTabs, PanelTemplates_SetTab = {}, {}, noop, noop
+ScrollingEdit_OnLoad, ScrollingEdit_OnCursorChanged, ScrollingEdit_OnTextChanged = noop, noop, noop
 tinsert, date = table.insert, os.date
 local blank = function() return false end
 GetTime = function() return mockTime end
@@ -276,6 +306,62 @@ class SharingTests(unittest.TestCase):
                           ("Clara Deer", "enUS", "3.4.2")])
         self.anna, self.bohdan, self.clara = self.wire.players
 
+    def check_draggable_window(self, window, strata="FULLSCREEN_DIALOG", hide_while_dragging=False):
+        self.assertTrue(window.IsShown(window))
+        self.assertEqual(window.strata, strata)
+        self.assertTrue(window.toplevel)
+        self.assertTrue(any(child.depth == -8 and child.alpha == 1 for child in window.children.values()))
+        (header,) = (child for child in window.children.values() if child.scripts.OnDragStart)
+        self.assertEqual(header.dragButton, "LeftButton")
+        header.scripts.OnDragStart(header)
+        self.assertTrue(window.moving)
+        if hide_while_dragging:
+            window.Hide(window)
+        else:
+            header.scripts.OnDragStop(header)
+        self.assertFalse(window.moving)
+
+    def test_windows_drag_and_layer_above_the_window_that_opened_them(self):
+        addon, frames = self.anna.addon, self.anna.g
+        addon.ToggleUI()
+        panel = frames.GuildAvengerPanel
+        self.check_draggable_window(panel, "DIALOG")
+        self.anna.click("GuildAvengerPanel", "watchlistRequestsButton", 0)
+        requests = frames.GuildAvengerRequests
+        self.check_draggable_window(requests)
+        self.anna.click("GuildAvengerPanel", "statistics")
+        self.check_draggable_window(frames.GuildAvengerStats)
+        self.assertGreater(frames.GuildAvengerStats.level, requests.level)
+        addon.OpenWatchlistRequests()
+        self.assertGreater(requests.level, frames.GuildAvengerStats.level)
+        self.check_draggable_window(requests, hide_while_dragging=True)
+        self.anna.click("GuildAvengerPanel", "sounds")
+        self.check_draggable_window(frames.GuildAvengerSounds)
+        self.anna.click("GuildAvengerPanel", "shareWatchlist")
+        self.check_draggable_window(frames.GuildAvengerDialog, hide_while_dragging=True)
+
+    def test_nested_settings_and_report_windows_open_in_front(self):
+        addon, frames = self.anna.addon, self.anna.g
+        addon.PromptSettings()
+        settings = frames.GuildAvengerSettings
+        self.check_draggable_window(settings)
+        language = next(child for child in settings.children.values()
+                        if child.kind == "DropdownButton" and child.menu[self.anna.text("languageUkrainian")])
+        language.menu[self.anna.text("languageUkrainian")]()
+        self.anna.click("GuildAvengerSettings", "applySettings")
+        comment = frames.GuildAvengerComment
+        self.assertGreater(comment.level, settings.level)
+        self.check_draggable_window(comment, hide_while_dragging=True)
+        self.anna.click("GuildAvengerSettings", "reportBug")
+        report = frames.GuildAvengerBugReport
+        self.assertGreater(report.level, settings.level)
+        self.check_draggable_window(report)
+        report.field.SetText(report.field, "Test")
+        self.anna.click("GuildAvengerBugReport", "send")
+        link = frames.GuildAvengerDownload
+        self.assertGreater(link.level, report.level)
+        self.check_draggable_window(link)
+
     def test_requests_badge_chat_click_and_selective_import(self):
         self.wire.bare_guild_sender = True
         self.bohdan.g.rosterOnline = False
@@ -308,7 +394,8 @@ class SharingTests(unittest.TestCase):
         self.assertIsNone(self.anna.read(hero))
         self.anna.click("GuildAvengerRequests", "inboxButton", 1)
         review = self.anna.g.GuildAvengerReview
-        self.assertTrue(review.IsShown(review))
+        self.check_draggable_window(review)
+        self.assertGreater(review.level, self.anna.g.GuildAvengerRequests.level)
         for row in review.rows.values():
             if row.change and row.change.key == guild:
                 row.check.SetChecked(row.check, False)
