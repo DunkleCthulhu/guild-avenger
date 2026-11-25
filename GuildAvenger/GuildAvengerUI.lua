@@ -1,7 +1,7 @@
 local addonName, addon = ...
 local L = addon.Text
 local panel, dialog, review, toast, download, minimapButton, soundWindow
-local statsWindow, commentWindow, settingsWindow, bugReport
+local statsWindow, commentWindow, settingsWindow, bugReport, requestsWindow
 local offers = {}
 local rowCount, mainRowCount, rowHeight, rowGap = 7, 7, 42, 4
 local highPrioritySound = "Interface\\AddOns\\GuildAvenger\\Sounds\\HighPriority.ogg"
@@ -217,9 +217,12 @@ local function renderRows()
 end
 
 function addon.RefreshUI()
-    if not panel or not panel:IsShown() then
-        return
-    end
+    local showPanel = panel and panel:IsShown()
+    local showRequests = requestsWindow and requestsWindow:IsShown()
+    if not showPanel and not showRequests then return end
+    local requests = addon.WatchlistRequests()
+    if showRequests then requestsWindow:Render(requests) end
+    if not showPanel then return end
     local scope = addon.Scope()
     if panel.scope ~= scope then
         panel.scope, panel.editing = scope, nil
@@ -256,6 +259,7 @@ function addon.RefreshUI()
     enabled(panel.submit, ready)
     enabled(panel.share, ready and scope ~= "local")
     enabled(panel.pull, ready and scope ~= "local")
+    panel.pull.label:SetText(L("watchlistRequestsButton", #requests))
     local replies = addon.InboxCount()
     enabled(panel.inbox, replies > 0)
     panel.inbox.label:SetText(L("inboxButton", replies))
@@ -273,6 +277,100 @@ function addon.RefreshUI()
     panel.scroll:SetValue(math.min(maximum, panel.scroll:GetValue()))
     panel.scroll:SetShown(maximum > 0)
     renderRows()
+end
+
+function addon.OpenWatchlistRequests()
+    if not requestsWindow then
+        local root = window("GuildAvengerRequests", 520, 309, "DIALOG")
+        tinsert(UISpecialFrames, "GuildAvengerRequests")
+        label(root, "GameFontNormalLarge", color.gold, L("watchlistRequestsTitle")):SetPoint("TOPLEFT", 19, -18)
+        local close = CreateFrame("Button", nil, root, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", -3, -3)
+        close:SetScript("OnClick", function() root:Hide() end)
+        local request = button(root, L("requestWatchlists"), 218, function()
+            status(root.status, addon.RequestWatchlists())
+        end)
+        request:SetPoint("TOPLEFT", 18, -45)
+        local inbox = button(root, L("inboxButton", 0), 178, function()
+            if addon.OpenPullInbox() then root:Hide() end
+        end)
+        inbox:SetPoint("LEFT", request, "RIGHT", 10, 0)
+        label(root, "GameFontNormal", color.gold, L("watchlistRequestsIncoming")):SetPoint("TOPLEFT", 18, -88)
+
+        local rows, page = {}, 1
+        for index = 1, 4 do
+            local row = CreateFrame("Frame", nil, root)
+            row:SetPoint("TOPLEFT", 18, -107 - (index - 1) * 36)
+            row:SetPoint("TOPRIGHT", -18, -107 - (index - 1) * 36)
+            row:SetHeight(32)
+            styleRow(row, index)
+            row.name = label(row, "GameFontHighlight", color.white)
+            row.name:SetPoint("LEFT", 9, 0)
+            row.name:SetWidth(222)
+            row.name:SetJustifyH("LEFT")
+            row.name:SetMaxLines(1)
+            row.dismiss = button(row, L("dismissWatchlistRequest"), 103, function()
+                status(root.status, addon.DismissWatchlistRequest(row.item.sender, row.item.id))
+            end)
+            row.dismiss:SetPoint("RIGHT", -4, 0)
+            row.send = button(row, L("sendMyWatchlist"), 139, function()
+                status(root.status, addon.ReplyToWatchlistRequest(row.item.sender, row.item.id))
+            end)
+            row.send:SetPoint("RIGHT", row.dismiss, "LEFT", -5, 0)
+            rows[index] = row
+        end
+        local empty = label(root, "GameFontHighlight", color.muted, L("noWatchlistRequests"))
+        empty:SetPoint("TOP", 0, -161)
+        root.status = label(root, "GameFontHighlightSmall", color.muted)
+        root.status:SetPoint("BOTTOMLEFT", 18, 21)
+        root.status:SetWidth(346)
+        root.status:SetJustifyH("LEFT")
+        root.status:SetMaxLines(2)
+        local nextPage = button(root, ">", 29, function() page = page + 1; addon.RefreshUI() end)
+        nextPage:SetPoint("BOTTOMRIGHT", -18, 14)
+        local previousPage = button(root, "<", 29, function() page = page - 1; addon.RefreshUI() end)
+        previousPage:SetPoint("RIGHT", nextPage, "LEFT", -5, 0)
+        local pageLabel = label(root, "GameFontHighlightSmall", color.muted)
+        pageLabel:SetPoint("RIGHT", previousPage, "LEFT", -7, 0)
+        function root:Render(requests)
+            local replies = addon.InboxCount()
+            enabled(inbox, replies > 0)
+            inbox.label:SetText(L("inboxButton", replies))
+            enabled(request, addon.GuildScope() ~= nil)
+            local pages = math.max(1, math.ceil(#requests / #rows))
+            page = math.min(page, pages)
+            for index, row in ipairs(rows) do
+                local item = requests[(page - 1) * #rows + index]
+                row.item = item
+                row:SetShown(item ~= nil)
+                if item then
+                    row.name:SetText(item.name)
+                    row.send.label:SetText(L(item.sending and "sendingWatchlist" or "sendMyWatchlist"))
+                    enabled(row.send, not item.sending)
+                    enabled(row.dismiss, not item.sending)
+                end
+            end
+            empty:SetShown(#requests == 0)
+            previousPage:SetShown(pages > 1)
+            nextPage:SetShown(pages > 1)
+            pageLabel:SetShown(pages > 1)
+            enabled(previousPage, page > 1)
+            enabled(nextPage, page < pages)
+            pageLabel:SetText(("%d / %d"):format(page, pages))
+        end
+        root:SetScript("OnShow", function()
+            page = 1
+            root.status:SetText("")
+            addon.RefreshUI()
+        end)
+        requestsWindow = root
+    end
+    requestsWindow:Show()
+    requestsWindow:Raise()
+end
+
+function addon.WatchlistReplyStatus(success, message)
+    if requestsWindow and requestsWindow:IsShown() then status(requestsWindow.status, success, message) end
 end
 
 local function resetForm()
@@ -821,9 +919,7 @@ local function createPanel()
     root.soundSettings:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -8)
     local statsButton = button(root, L("statistics"), 110, function() addon.OpenStats() end)
     statsButton:SetPoint("LEFT", root.soundSettings, "RIGHT", 8, 0)
-    root.pull = button(root, L("requestWatchlists"), 184, function()
-        status(root.status, addon.RequestWatchlists())
-    end)
+    root.pull = button(root, L("watchlistRequestsButton", 0), 184, addon.OpenWatchlistRequests)
     root.pull:SetPoint("LEFT", statsButton, "RIGHT", 8, 0)
     root.inbox = button(root, L("inboxButton", 0), 184, function() addon.OpenPullInbox() end)
     root.inbox:SetPoint("LEFT", root.pull, "RIGHT", 8, 0)
@@ -1704,7 +1800,9 @@ end
 function addon.OpenPullInbox()
     if (dialog and dialog:IsShown()) or (review and review:IsShown()) then return end
     local offer = addon.PreviewInbox()
-    if offer then showReview(offer) end
+    if not offer then return end
+    showReview(offer)
+    return true
 end
 
 function addon.OfferImport(sender, preview)

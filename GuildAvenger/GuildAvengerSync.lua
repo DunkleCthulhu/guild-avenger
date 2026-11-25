@@ -330,10 +330,15 @@ function addon.RevokeWatchlistLinks()
     return true, L("watchlistLinksRevoked")
 end
 
-local function stopSending(message)
-    if not sending.quiet then
-        addon.Say(message)
+local function finishReply(request, success)
+    if request then
+        request.sending, request.sent = nil, success or nil
+        addon.RefreshUI()
     end
+end
+
+local function stopSending(message, success)
+    local completed = sending
     sending = table.remove(waiting, 1)
     if sending then
         sending.progressAt = GetTime()
@@ -341,6 +346,9 @@ local function stopSending(message)
         ticker:Cancel()
         ticker = nil
     end
+    finishReply(completed.transfer.request, success)
+    if completed.transfer.request then addon.WatchlistReplyStatus(success, message) end
+    if not completed.quiet then addon.Say(message) end
 end
 
 local function sendNext()
@@ -376,7 +384,7 @@ local function sendNext()
     sending.position = sending.position + 1
     sending.progressAt = GetTime()
     if sending.position > #sending.packets then
-        stopSending(L("transferDone", member.name))
+        stopSending(L("transferDone", member.name), true)
     end
 end
 
@@ -424,8 +432,12 @@ end
 local function finishProbe(id, probe, packed)
     if probing[id] ~= probe then return end
     probing[id] = nil
-    if probe.scope ~= guildScope() or not currentMember(probe.key, probe.identity) then return end
-    enqueue(probe.key, probe.transfer, nil, probe.revision, packed)
+    if probe.scope == guildScope() and currentMember(probe.key, probe.identity)
+        and enqueue(probe.key, probe.transfer, nil, probe.revision, packed) then return end
+    finishReply(probe.transfer.request, false)
+    local message = L("transferCouldNotStart")
+    if probe.transfer.request then addon.WatchlistReplyStatus(false, message) end
+    addon.Say(message)
 end
 
 local function startTransfer(key, transfer, revision)
@@ -477,7 +489,7 @@ makePackets = function(selection, includeRemovals, pullID)
             guards[entryKey] = {record = entry, note = entry.note, author = entry.author}
         end
     end
-    if #entries + #removals == 0 then
+    if #entries + #removals == 0 and not pullID then
         return nil, L("nothingToShare")
     end
     if #entries + #removals > maxEntries then
@@ -568,19 +580,51 @@ function addon.RequestWatchlists()
     return true, L("listRequestSent")
 end
 
+local function activeRequest(sender, request)
+    if not request or request.scope ~= guildScope() or GetTime() - request.at >= requestLifetime then return end
+    return currentMember(sender, request.identity)
+end
+
+function addon.WatchlistRequests()
+    local requests = {}
+    for sender, request in pairs(guildRequests) do
+        local member = not request.sent and not request.dismissed and activeRequest(sender, request)
+        if member then
+            requests[#requests + 1] = {sender = sender, name = member.name, id = request.id, sending = request.sending}
+        end
+    end
+    table.sort(requests, function(left, right) return left.sender < right.sender end)
+    return requests
+end
+
 local function replyToListRequest(sender, id, revision)
     local request = guildRequests[sender]
-    local member = request and currentMember(sender, request.identity)
-    if not request or request.id ~= id or not member or request.scope ~= guildScope()
-        or GetTime() - request.at >= requestLifetime then
-        return false, L("listRequestExpired")
-    end
+    local member = activeRequest(sender, request)
+    if not member or request.id ~= id or request.dismissed then return false, L("listRequestExpired") end
     if request.sent then return false, L("listRequestAlreadySent") end
+    if request.sending then return false, L("transferInProgress") end
     local transfer, errorMessage = makePackets(nil, false, id)
     if not transfer then return false, errorMessage end
-    if not startTransfer(sender, transfer, revision) then return false, L("transferInProgress") end
-    request.sent = true
+    transfer.request = request
+    if not startTransfer(sender, transfer, revision) then return false, L("transferCouldNotStart") end
+    request.sending = true
+    addon.RefreshUI()
     return true, L("transferStarted", member.name)
+end
+
+function addon.ReplyToWatchlistRequest(sender, id)
+    if not addon.UpdateScope() then return false, L("listRequestExpired") end
+    return replyToListRequest(sender, id)
+end
+
+function addon.DismissWatchlistRequest(sender, id)
+    local request = guildRequests[sender]
+    if not addon.UpdateScope() or not activeRequest(sender, request) or request.id ~= id or request.sending then
+        return false, L("listRequestExpired")
+    end
+    request.dismissed = true
+    addon.RefreshUI()
+    return true, L("listRequestDismissed")
 end
 
 local function receiveListRequest(sender, member, id, qualified)
@@ -594,15 +638,21 @@ local function receiveListRequest(sender, member, id, qualified)
     end
     request = {id = id, scope = scope, at = now, identity = member.identity}
     guildRequests[sender] = request
+    C_Timer.After(requestLifetime, function()
+        if guildRequests[sender] ~= request then return end
+        guildRequests[sender] = nil
+        addon.RefreshUI()
+    end)
     local function offerReply()
         local link = ("|Haddon:GuildAvengerPull:%s:%s|h[%s]|h"):format(id, sender, L("replyToListRequest"))
         addon.Say(L("guildmateRequestedList", member.name, link))
         addon.NotifyWatchlistRequest(member.name)
+        addon.RefreshUI()
     end
     if qualified and addon.AutoReplyEnabled() then
         local revision = autoReplyRevision
         C_Timer.After(math.random(5, 30) / 10, function()
-            if guildScope() ~= scope or guildRequests[sender] ~= request or request.sent
+            if guildScope() ~= scope or guildRequests[sender] ~= request or request.sent or request.sending or request.dismissed
                 or not currentMember(sender, request.identity) then return end
             if revision == autoReplyRevision and addon.AutoReplyEnabled() and replyToListRequest(sender, id, revision) then return end
             offerReply()
@@ -689,15 +739,19 @@ local function chatFilter(_, _, message, sender, ...)
         return false, ("Guild Avenger %s · %s · %s"):format(release, downloadLink(), L("projectInfo")), sender, ...
     end
     local id = message:match("^%[Guild Avenger ([%da-f]+%.[%da-f]+)%]$")
-    local key = id and #id <= 16 and addon.GuildSender(sender)
-    if not key then
-        return false
+    if not id or #id > 16 then return false end
+    local key, _, suffix, qualified = rosterName(sender)
+    local member = guildMember(key)
+    if key and not member then
+        addon.ReadRoster()
+        member = guildMember(key)
     end
-    local link = ("|Haddon:GuildAvenger:%s:%s|h[%s]|h"):format(id, roster[key].address, L("shareLinkLabel"))
+    if not member or (qualified and suffix ~= member.suffix) or not currentMember(key, member.identity) then return false end
+    local link = ("|Haddon:GuildAvenger:%s:%s|h[%s]|h"):format(id, member.address, L("shareLinkLabel"))
     return false, link, sender, ...
 end
 
-local function requestLink(_, link, _, mouseButton)
+local function requestLink(_, _, link, _, mouseButton)
     if not addon.IsText(link) or mouseButton ~= "LeftButton" then
         return
     end
@@ -707,9 +761,11 @@ local function requestLink(_, link, _, mouseButton)
     end
     local pullID, requester = link:match("^addon:GuildAvengerPull:([%da-f]+%.[%da-f]+):([^:]+)$")
     if pullID then
-        if addon.UpdateScope() then
-            local _, message = replyToListRequest(requester, pullID)
-            addon.Say(message)
+        local request = guildRequests[requester]
+        if addon.UpdateScope() and activeRequest(requester, request) and request.id == pullID then
+            addon.OpenWatchlistRequests()
+        else
+            addon.Say(L("listRequestExpired"))
         end
         return
     end
@@ -758,6 +814,10 @@ local function finish(sender, batch)
         local current = inbox()
         if not current[sender] or owner.at >= current[sender].at then
             current[sender] = {sender = roster[sender].name, entries = entries, at = owner.at, identity = batch.identity}
+            if not owner.notified then
+                owner.notified = true
+                addon.Say(L("watchlistReplyArrived"))
+            end
             addon.RefreshUI()
         end
         return
@@ -896,6 +956,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
             if senderRank > installedRank then
                 addon.Say(L("shareNewerVersion", data, downloadLink()))
             end
+            if batch.pull and batch.count == 0 then finish(sender, batch) end
         end
         return
     end
@@ -976,5 +1037,5 @@ function addon.InitSync()
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
     local addFilter = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter or ChatFrame_AddMessageEventFilter
     if addFilter then addFilter("CHAT_MSG_GUILD", chatFilter) end
-    if EventRegistry then EventRegistry:RegisterCallback("SetItemRef", requestLink) end
+    if EventRegistry then EventRegistry:RegisterCallback("ChatFrame.OnHyperlinkClick", requestLink) end
 end

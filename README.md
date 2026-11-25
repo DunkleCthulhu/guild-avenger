@@ -87,7 +87,7 @@ When the recipient supports it, Guild Avenger packs several entries into one mes
 
 In 3.3.1, automatic replies are off until you apply permission for the current character and guild. The previous account-wide permission is reset on upgrade. **Cancel** discards settings changes. Applying a change that turns automatic replies off also stops queued replies. Shared records include notes, authors, dates added, and death counts.
 
-When a request needs a manual reply, the addon shows a brief on-screen notice and adds **Send my watchlist** to your chat.
+In 3.4.2, open **Requests → Request guild watchlists** to ask the guild. If a guildmate needs to reply manually, they see an on-screen notice and an **Open requests** link in chat. In **Requests**, they can send their current list or dismiss the request. Requests stay available for five minutes. **Inbox** shows replies for review before any entries are added.
 
 ## Guild sightings
 
@@ -118,5 +118,7 @@ In **Statistics → Guild race** the guild leader can lock the selected entries 
 ## Contributing
 
 Fork the repository and open a pull request. To test locally, copy the `GuildAvenger` folder into your AddOns folder and type `/reload` in WoW. When reporting a bug, include your WoW version and the steps to reproduce it.
+
+Run `python scripts/test-watchlist-sharing.py` with the Python package `lupa` installed to exercise sharing with simulated WoW clients. For an in-game check, use two online guildmates on the same addon version. Send a watchlist request, answer it manually, and check that only selected entries are added from the inbox. Also try a direct share and a guild chat link.
 
 Guild Avenger is a free, open-source addon made for fun. The project is developed without monetization. The code is available under the [MIT License](LICENSE).
