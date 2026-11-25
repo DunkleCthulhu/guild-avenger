@@ -165,7 +165,7 @@ C_Timer = {
     NewTicker=function(seconds, callback)
         -- Only run transfer and map timers. Patrol and statistics are outside these tests.
         local ticker = {due=mockTime+seconds, interval=seconds, callback=callback, Cancel=function(self) self.cancelled=true end}
-        if seconds == 0.25 or seconds == 5 then table.insert(jobs, ticker) end
+        if seconds == 0.25 or seconds == 5 or seconds == 30 then table.insert(jobs, ticker) end
         return ticker
     end
 }
@@ -709,6 +709,101 @@ class SharingTests(unittest.TestCase):
         receiver.g.fire("PLAYER_GUILD_UPDATE")
         self.assertIsNone(map_frame.pins["Enemy Player"])
 
+    def test_auto_sync_exchanges_both_lists_without_notifying_other_members(self):
+        anna_key = self.anna.add("First Guild", "From Anna")
+        bohdan_key = self.bohdan.add("Second Guild", "From Bohdan", high=True)
+        self.clara.add("Third Guild")
+        self.clara.addon.SetAutoReply(True)
+        self.wire.bare_guild_sender = True
+        self.anna.addon.SetAutoSyncWatchlists(True)
+        self.wire.advance(10)
+        self.assertEqual(self.anna.addon.InboxCount(), 0)
+        self.assertEqual(len(self.wire.packets), 1)
+        self.bohdan.addon.SetAutoSyncWatchlists(True)
+        self.wire.advance(15)
+        for receiver, key, note in [(self.anna, bohdan_key, "From Bohdan"),
+                                    (self.bohdan, anna_key, "From Anna")]:
+            self.assertIsNone(receiver.read(key), "Auto sync must never import without approval")
+            preview = receiver.addon.PreviewInbox()
+            self.assertEqual(preview.added, 1)
+            self.assertEqual(preview.changes[1].record.note, note)
+        for player in self.wire.players:
+            self.assertEqual(len(player.g.chat), 0)
+            self.assertEqual(len(player.g.notices), 0)
+            self.assertEqual(len(player.addon.WatchlistRequests()), 0)
+        self.assertTrue(all(address != self.clara.address for _, _, _, address, _ in self.wire.packets))
+
+    def test_auto_sync_requires_a_private_confirmation_before_sending_records(self):
+        self.anna.add("Enemy Guild")
+        self.anna.addon.PromptSettings()
+        settings = self.anna.g.GuildAvengerSettings
+        title = self.anna.text("autoSyncWatchlists")
+        (control,) = (child for child in settings.children.values() if child.kind == "CheckButton"
+                      and any(label.text == title for label in child.children.values()))
+        self.assertFalse(control.GetChecked(control))
+        control.SetChecked(control, True)
+        control.scripts.OnClick(control)
+        self.anna.click("GuildAvengerSettings", "applySettings")
+        self.assertTrue(self.anna.addon.AutoSyncWatchlistsEnabled())
+        self.wire.advance(10)
+        self.anna.g.fire("CHAT_MSG_ADDON", PREFIX, "U\tabcd.1", "GUILD", self.clara.address)
+        self.anna.g.fire("CHAT_MSG_ADDON", PREFIX, "J\tabcd.2\tabcd.3", "WHISPER", self.clara.address)
+        self.wire.advance(10)
+        self.assertEqual([packet[1][0] for packet in self.wire.packets], ["U", "J"])
+        self.assertEqual(self.clara.addon.InboxCount(), 0)
+        self.assertEqual(len(self.anna.g.chat), 0)
+
+    def test_hourly_sync_offers_only_new_or_changed_records(self):
+        accepted = self.bohdan.add("Accepted Guild", "Local version")
+        skipped = self.bohdan.add("Skipped Guild", "Original")
+        self.anna.addon.SetAutoSyncWatchlists(True)
+        self.bohdan.addon.SetAutoSyncWatchlists(True)
+        self.wire.advance(12)
+        preview = self.anna.addon.PreviewInbox()
+        self.assertEqual(preview.added, 2)
+        choices = {change.key: change.record for change in preview.changes.values() if change.key == accepted}
+        preview.accept(self.anna.lua.table_from(choices))
+        self.assertIsNotNone(self.anna.read(accepted))
+        self.assertIsNone(self.anna.read(skipped))
+        self.assertEqual(self.anna.addon.InboxCount(), 0)
+        self.wire.advance(3586)
+        automatic = lambda: [packet for packet in self.wire.packets if packet[1].startswith("U\t")]
+        self.assertEqual(len(automatic()), 2)
+        self.wire.advance(34)
+        self.assertEqual(len(automatic()), 4)
+        self.assertEqual(self.anna.addon.InboxCount(), 0)
+        self.bohdan.read(skipped).note = "Updated"
+        self.bohdan.add("New Guild")
+        self.wire.advance(3600)
+        preview = self.anna.addon.PreviewInbox()
+        self.assertEqual({change.record.name for change in preview.changes.values()}, {"Skipped Guild", "New Guild"})
+
+    def test_auto_sync_runs_after_login_roster_and_stops_when_disabled(self):
+        wire = Wire([("Anna Wolf", "enUS", "3.4.5"), ("Bohdan Fox", "enUS", "3.4.5")])
+        old, peer = wire.players
+        peer.add("Enemy Guild")
+        peer.addon.SetAutoSyncWatchlists(True)
+        wire.advance(70)
+        new = Client(wire, old.name, 0, "enUS", "3.4.5")
+        wire.players[0] = new
+        identity = "anna wolf\tlayer42\tPlayer-1-AA0"
+        guild_config = new.lua.table_from({identity: new.lua.table(enabled=True, lastAt=1700000100,
+                                                                   reviewed=new.lua.table())})
+        new.g.GuildAvengerDB.autoSyncGuilds = new.lua.table_from({"42": guild_config})
+        new.g.rosterReady = False
+        new.g.fire("ADDON_LOADED", "GuildAvenger")
+        new.g.fire("PLAYER_ENTERING_WORLD", True, False)
+        self.assertEqual(len(wire.packets), 1)
+        new.g.rosterReady = True
+        new.refresh_roster()
+        self.assertEqual([packet[1][:1] for packet in wire.packets], ["U", "U"])
+        wire.flush()
+        new.addon.SetAutoSyncWatchlists(False)
+        wire.advance(15)
+        self.assertEqual(new.addon.InboxCount(), 0)
+        self.assertFalse(any(packet[1].startswith("B\t") for packet in wire.packets))
+        wire.advance(3601)
+        self.assertTrue(all(packet[0] == peer.name for packet in wire.packets[2:]))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -958,10 +958,14 @@ frame:SetScript("OnEvent", function(_, event, ...)
         addon.InitMenus()
         addon.RefreshUI()
         addon.RefreshSettingsGuild()
-        if event == "PLAYER_ENTERING_WORLD" then addon.InitMinimap() end
+        if event == "PLAYER_ENTERING_WORLD" then
+            addon.InitMinimap()
+            addon.CheckWatchlistSync()
+        end
         addon.RefreshSightingMap()
     elseif event == "GUILD_ROSTER_UPDATE" then
         addon.ReadRoster()
+        addon.CheckWatchlistSync()
         addon.SeasonRosterReady()
         addon.RefreshStats()
         addon.RefreshUI()

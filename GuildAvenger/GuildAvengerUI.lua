@@ -554,7 +554,7 @@ end
 
 function addon.PromptSettings()
     if not settingsWindow then
-        local root = window("GuildAvengerSettings", 430, 563)
+        local root = window("GuildAvengerSettings", 446, 627)
         tinsert(UISpecialFrames, "GuildAvengerSettings")
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
@@ -574,21 +574,28 @@ function addon.PromptSettings()
         hint:SetJustifyH("LEFT")
         hint:SetMaxLines(2)
 
-        local attackers = checkbox(root, 17, -186, L("shareAttackerDetails"))
+        local sync = checkbox(root, 17, -179, L("autoSyncWatchlists"))
+        local syncHint = label(root, "GameFontHighlightSmall", color.muted, L("autoSyncWatchlistsHint"))
+        syncHint:SetPoint("TOPLEFT", 20, -208)
+        syncHint:SetPoint("TOPRIGHT", -20, -208)
+        syncHint:SetJustifyH("LEFT")
+        syncHint:SetMaxLines(3)
+
+        local attackers = checkbox(root, 17, -250, L("shareAttackerDetails"))
         local attackerHint = label(root, "GameFontHighlightSmall", color.muted, L("shareAttackerDetailsHint"))
-        attackerHint:SetPoint("TOPLEFT", 20, -215)
-        attackerHint:SetPoint("TOPRIGHT", -20, -215)
+        attackerHint:SetPoint("TOPLEFT", 20, -279)
+        attackerHint:SetPoint("TOPRIGHT", -20, -279)
         attackerHint:SetJustifyH("LEFT")
         attackerHint:SetMaxLines(3)
 
         local guildMessage = label(root, "GameFontHighlightSmall", color.muted)
-        guildMessage:SetPoint("TOPLEFT", 20, -254)
-        guildMessage:SetPoint("TOPRIGHT", -20, -254)
+        guildMessage:SetPoint("TOPLEFT", 20, -318)
+        guildMessage:SetPoint("TOPRIGHT", -20, -318)
         guildMessage:SetJustifyH("LEFT")
         guildMessage:SetMaxLines(2)
-        label(root, "GameFontHighlight", color.white, L("alertDuration")):SetPoint("TOPLEFT", 20, -292)
+        label(root, "GameFontHighlight", color.white, L("alertDuration")):SetPoint("TOPLEFT", 20, -356)
         local duration = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
-        duration:SetPoint("TOPRIGHT", -20, -285)
+        duration:SetPoint("TOPRIGHT", -20, -349)
         duration:SetWidth(230)
         duration:SetupMenu(function(_, menu)
             local function isSelected(seconds) return alertDuration() == seconds end
@@ -597,15 +604,15 @@ function addon.PromptSettings()
                 menu:CreateRadio(L("alertSeconds", seconds), isSelected, selectDuration, seconds)
             end
         end)
-        local minimap = checkbox(root, 17, -320, L("showMinimapButton"))
+        local minimap = checkbox(root, 17, -384, L("showMinimapButton"))
         minimap:SetScript("OnClick", function(self) addon.SetMinimapShown(self:GetChecked() == true) end)
 
-        local scope, identity, privacyReady, savedReply, savedAttackers
-        label(root, "GameFontHighlight", color.white, L("sightings")):SetPoint("TOPLEFT", 20, -357)
+        local scope, identity, privacyReady, savedReply, savedSync, savedAttackers
+        label(root, "GameFontHighlight", color.white, L("sightings")):SetPoint("TOPLEFT", 20, -421)
         local sightings = {}
         local titles = { send = "sightingSend", receive = "sightingReceive", popup = "sightingPopup" }
         for index, setting in ipairs({ "send", "receive", "popup" }) do
-            local check = checkbox(root, 17, -353 - index * 27, L(titles[setting]))
+            local check = checkbox(root, 17, -417 - index * 27, L(titles[setting]))
             check:SetScript("OnClick", function(self)
                 local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
                 if currentScope and currentScope == scope and currentIdentity == identity then
@@ -617,16 +624,16 @@ function addon.PromptSettings()
         end
 
         local rule = root:CreateTexture(nil, "ARTWORK")
-        rule:SetPoint("TOPLEFT", 20, -464)
-        rule:SetPoint("TOPRIGHT", -20, -464)
+        rule:SetPoint("TOPLEFT", 20, -528)
+        rule:SetPoint("TOPRIGHT", -20, -528)
         rule:SetHeight(1)
         rule:SetColorTexture(unpack(color.border))
-        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -477)
-        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -469)
+        label(root, "GameFontHighlight", color.gold, L("createdByGuild")):SetPoint("TOPLEFT", 20, -541)
+        button(root, L("reportBug"), 148, function() addon.PromptBugReport() end):SetPoint("TOPRIGHT", -20, -533)
         local authors = C_AddOns.GetAddOnMetadata(addonName, "Author") or ""
         local credits = label(root, "GameFontHighlightSmall", color.muted, L("addonCredits", authors))
-        credits:SetPoint("TOPLEFT", 20, -497)
-        credits:SetPoint("TOPRIGHT", -20, -497)
+        credits:SetPoint("TOPLEFT", 20, -561)
+        credits:SetPoint("TOPRIGHT", -20, -561)
         credits:SetJustifyH("LEFT")
 
         local selected = GuildAvengerDB.language
@@ -635,6 +642,7 @@ function addon.PromptSettings()
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
         local function sharingChanged()
             return privacyReady and ((reply:GetChecked() == true) ~= savedReply
+                or (sync:GetChecked() == true) ~= savedSync
                 or (attackers:GetChecked() == true) ~= savedAttackers)
         end
         local function updateApply()
@@ -649,10 +657,13 @@ function addon.PromptSettings()
             if privacyReady and (currentScope ~= scope or currentIdentity ~= identity) then
                 scope, identity = currentScope, currentIdentity
                 savedReply, savedAttackers = addon.AutoReplyEnabled(), addon.AttackerSharing()
+                savedSync = addon.AutoSyncWatchlistsEnabled()
                 reply:SetChecked(savedReply)
+                sync:SetChecked(savedSync)
                 attackers:SetChecked(savedAttackers)
             end
             reply:SetEnabled(privacyReady)
+            sync:SetEnabled(privacyReady)
             attackers:SetEnabled(privacyReady)
             for setting, check in pairs(sightings) do
                 check:SetEnabled(privacyReady)
@@ -677,9 +688,12 @@ function addon.PromptSettings()
                     return
                 end
                 local nextReply, nextAttackers = reply:GetChecked() == true, attackers:GetChecked() == true
+                local nextSync = sync:GetChecked() == true
                 if nextReply ~= savedReply then addon.SetAutoReply(nextReply) end
+                if nextSync ~= savedSync then addon.SetAutoSyncWatchlists(nextSync) end
                 if nextAttackers ~= savedAttackers then addon.SetAttackerSharing(nextAttackers) end
                 savedReply, savedAttackers = nextReply, nextAttackers
+                savedSync = nextSync
             end
             if selected ~= addon.Language() then
                 updateApply()
@@ -688,11 +702,13 @@ function addon.PromptSettings()
             end
         end)
         reply:SetScript("OnClick", updateApply)
+        sync:SetScript("OnClick", updateApply)
         attackers:SetScript("OnClick", updateApply)
         root:SetScript("OnShow", function()
             selected = GuildAvengerDB.language
             scope, identity = nil, nil
             reply:SetChecked(false)
+            sync:SetChecked(false)
             attackers:SetChecked(false)
             addon.UpdateScope()
             addon.ReadRoster()

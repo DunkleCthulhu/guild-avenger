@@ -13,14 +13,18 @@ local requestedLists, guildRequests = {}, {}
 local pendingGuildRequests = {}
 local pullInbox, inboxScope = {}, nil
 local lastListRequest
+local hourlyInterval, loginSyncPending = 3600, true
+local automaticReplies, automaticReplyScope = {}, nil
 local requestLifetime = 300
 local requestCooldown = 60
 local rosterWait, maxPendingRequests = 15, 32
 local autoReplyRevision = 0
+local autoSyncRevision = 0
 local packetLimit = 240
 local capabilities = "M"
 local capable, announced, probing = {}, {}, {}
 local makePackets, enqueue, currentMember, drainGuildRequests
+local autoSyncSettings
 
 local function transferID()
     sequence = sequence % 65535 + 1
@@ -88,6 +92,16 @@ end
 local function sourceLabel(names)
     if #names <= 4 then return table.concat(names, ", ") end
     return table.concat(names, ", ", 1, 4) .. " +" .. (#names - 4)
+end
+
+local function recordRevision(record)
+    local first, second = 0, 0
+    for index = 1, #record.note do
+        local byte = record.note:byte(index)
+        first = (first * 131 + byte) % 2147483647
+        second = (second * 137 + byte) % 2147483629
+    end
+    return ("%d:%d:%d:%d:%d"):format(record.deaths, record.high and 1 or 0, #record.note, first, second)
 end
 
 function addon.PreviewInbox()
@@ -161,8 +175,14 @@ function addon.PreviewInbox()
             end
         end
         local current = inbox()
+        local settings = autoSyncSettings()
         for key, reply in pairs(replies) do
             if current[key] == reply then current[key] = nil end
+            if settings and reply.automatic then
+                local reviewed = settings.reviewed[reply.identity] or {}
+                settings.reviewed[reply.identity] = reviewed
+                for recordKey, record in pairs(reply.entries) do reviewed[recordKey] = recordRevision(record) end
+            end
         end
         local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, true, planned)
         addon.Say(L("importFinished", newEntries, updatedEntries, removedEntries or 0))
@@ -288,6 +308,36 @@ function addon.SetAutoReply(enabled)
     autoReplyRevision = autoReplyRevision + 1
 end
 
+autoSyncSettings = function()
+    local scope, identity = addon.GuildPrivacyIdentity()
+    local settings = scope and GuildAvengerDB.autoSyncGuilds[scope]
+    local current = settings and settings[identity]
+    if current and current.enabled then return current end
+end
+
+function addon.AutoSyncWatchlistsEnabled()
+    return autoSyncSettings() ~= nil
+end
+
+function addon.SetAutoSyncWatchlists(enabled)
+    local scope, identity = addon.GuildPrivacyIdentity()
+    if not scope then return end
+    local settings = GuildAvengerDB.autoSyncGuilds
+    settings[scope] = settings[scope] or {}
+    local current = settings[scope][identity]
+    if (current and current.enabled or false) == enabled then return end
+    autoSyncRevision = autoSyncRevision + 1
+    if enabled then
+        current = current or { reviewed = {} }
+        current.enabled = true
+        settings[scope][identity] = current
+        loginSyncPending = true
+        addon.CheckWatchlistSync()
+    else
+        current.enabled = false
+    end
+end
+
 function addon.SuggestRecipients(value)
     local matching = {}
     if not rosterScope or rosterScope ~= guildScope() then
@@ -365,6 +415,10 @@ local function sendNext()
         stopSending(L("autoReplyStopped"))
         return
     end
+    if transfer.automatic and (transfer.syncRevision ~= autoSyncRevision or not addon.AutoSyncWatchlistsEnabled()) then
+        stopSending()
+        return
+    end
     if (offer and not activeOffer(offer)) or (not offer and not snapshotCurrent(transfer)) then
         stopSending(L("watchlistTransferRevoked"))
         return
@@ -432,8 +486,11 @@ end
 local function finishProbe(id, probe, packed)
     if probing[id] ~= probe then return end
     probing[id] = nil
+    if probe.transfer.automatic and (not packed or probe.transfer.syncRevision ~= autoSyncRevision
+        or not addon.AutoSyncWatchlistsEnabled()) then return end
     if probe.scope == guildScope() and currentMember(probe.key, probe.identity)
         and enqueue(probe.key, probe.transfer, nil, probe.revision, packed) then return end
+    if probe.transfer.automatic then return end
     finishReply(probe.transfer.request, false)
     local message = L("transferCouldNotStart")
     if probe.transfer.request then addon.WatchlistReplyStatus(false, message) end
@@ -447,8 +504,16 @@ local function startTransfer(key, transfer, revision)
     local id = transfer.id
     local probe = { key = key, scope = scope, identity = current.identity, transfer = transfer, revision = revision }
     probing[id] = probe
-    C_ChatInfo.SendAddonMessage(prefix, "A\t" .. id, "WHISPER", current.address)
-    C_Timer.After(2, function() finishProbe(id, probe, false) end)
+    local message = "A\t" .. id
+    if transfer.automatic then
+        message = ("%s\t%s\t%s"):format(transfer.reciprocal and "K" or "J", id, transfer.pullID)
+    end
+    local result = C_ChatInfo.SendAddonMessage(prefix, message, "WHISPER", current.address)
+    if transfer.automatic and result ~= results.Success then
+        probing[id] = nil
+        return false
+    end
+    C_Timer.After(transfer.automatic and 5 or 2, function() finishProbe(id, probe, false) end)
     return true
 end
 
@@ -547,7 +612,7 @@ enqueue = function(key, transfer, offer, revision, packed)
     if not member or not currentMember(key, member.identity) then return false end
     local job = {scope = guildScope(), key = key, identity = member.identity, position = 1, transfer = transfer,
         packets = packed and transfer.packed or transfer.packets,
-        progressAt = GetTime(), quiet = offer ~= nil, offer = offer, autoRevision = revision}
+        progressAt = GetTime(), quiet = offer ~= nil or transfer.automatic == true, offer = offer, autoRevision = revision}
     if sending then
         if #waiting >= 20 then return false end
         waiting[#waiting + 1] = job
@@ -558,26 +623,44 @@ enqueue = function(key, transfer, offer, revision, packed)
     return true
 end
 
-function addon.RequestWatchlists()
+local function requestWatchlists(automatic)
     if not addon.UpdateScope() or not guildScope() then return false, L("sharingRequiresGuild") end
     addon.RefreshRoster()
     local scope, own, now = guildScope(), addon.UnitName("player"), GetTime()
     if not addon.IsGuildMember(own) then addon.ReadRoster() end
     if not addon.IsGuildMember(own) then return false, L("rosterLoading") end
-    if lastListRequest and lastListRequest.scope == scope and now - lastListRequest.at < requestCooldown then
+    if not automatic and lastListRequest and lastListRequest.scope == scope and now - lastListRequest.at < requestCooldown then
         return false, L("listRequestCooldown")
     end
     local id = transferID()
-    local result = C_ChatInfo.SendAddonMessage(prefix, "P\t" .. id, "GUILD")
+    local result = C_ChatInfo.SendAddonMessage(prefix, (automatic and "U\t" or "P\t") .. id, "GUILD")
     if result ~= results.Success then
         return false, L(result == results.AddOnMessageLockdown and "chatLockdown" or "shareRequestFailed")
     end
     for key, request in pairs(requestedLists) do
         if request.scope ~= scope or now - request.at >= requestLifetime then requestedLists[key] = nil end
     end
-    lastListRequest = { scope = scope, at = now, received = {} }
-    requestedLists[id] = lastListRequest
+    local request = { scope = scope, at = now, received = {}, automatic = automatic, syncRevision = autoSyncRevision,
+        verified = automatic and {} or nil }
+    requestedLists[id] = request
+    if not automatic then lastListRequest = request end
     return true, L("listRequestSent")
+end
+
+function addon.RequestWatchlists()
+    return requestWatchlists(false)
+end
+
+function addon.CheckWatchlistSync()
+    local settings = autoSyncSettings()
+    if not settings then return end
+    local now = GetServerTime()
+    local elapsed = settings.lastAt and now - settings.lastAt
+    if elapsed and elapsed < (loginSyncPending and requestCooldown or hourlyInterval) then return end
+    if requestWatchlists(true) then
+        loginSyncPending = false
+        settings.lastAt = now
+    end
 end
 
 local function activeRequest(sender, request)
@@ -662,7 +745,26 @@ local function receiveListRequest(sender, member, id, qualified)
     end
 end
 
-local function handleGuildRequest(raw, id)
+local function receiveAutomaticRequest(sender, member, id)
+    if not addon.AutoSyncWatchlistsEnabled() then return end
+    local scope, now = guildScope(), GetTime()
+    if automaticReplyScope ~= scope then automaticReplies, automaticReplyScope = {}, scope end
+    local previous = automaticReplies[sender]
+    if previous and (previous.id == id or now - previous.at < requestCooldown) then return end
+    local request = { id = id, at = now, scope = scope, automatic = true, syncRevision = autoSyncRevision,
+        received = {}, verified = {} }
+    automaticReplies[sender] = request
+    C_Timer.After(math.random(5, 30) / 10, function()
+        if guildScope() ~= scope or automaticReplies[sender] ~= request or request.syncRevision ~= autoSyncRevision
+            or not addon.AutoSyncWatchlistsEnabled() or not currentMember(sender, member.identity) then return end
+        local transfer = makePackets(nil, false, id)
+        if not transfer then return end
+        transfer.automatic, transfer.syncRevision = true, request.syncRevision
+        request.sentProbe = startTransfer(sender, transfer)
+    end)
+end
+
+local function handleGuildRequest(raw, id, automatic)
     local key, _, suffix, qualified = rosterName(raw)
     if not key or key == addon.UnitName("player") then return true end
     local member = guildMember(key)
@@ -672,7 +774,11 @@ local function handleGuildRequest(raw, id)
     if not member then return false end
     -- Guild broadcasts can show a bare name. A unique roster match can show a
     -- prompt, while an address mismatch must never trigger an automatic reply.
-    receiveListRequest(key, member, id, member.suffix == suffix)
+    if automatic then
+        receiveAutomaticRequest(key, member, id)
+    else
+        receiveListRequest(key, member, id, member.suffix == suffix)
+    end
     return true
 end
 
@@ -681,15 +787,16 @@ drainGuildRequests = function()
     local waiting = pendingGuildRequests
     pendingGuildRequests = {}
     local scope, now = guildScope(), GetTime()
-    for raw, request in pairs(waiting) do
-        if request.scope == scope and now - request.at < rosterWait and not handleGuildRequest(raw, request.id) then
-            pendingGuildRequests[raw] = request
+    for key, request in pairs(waiting) do
+        if request.scope == scope and now - request.at < rosterWait
+            and not handleGuildRequest(request.raw, request.id, request.automatic) then
+            pendingGuildRequests[key] = request
         end
     end
 end
 
-local function queueGuildRequest(raw, id)
-    if handleGuildRequest(raw, id) then return end
+local function queueGuildRequest(raw, id, automatic)
+    if handleGuildRequest(raw, id, automatic) then return end
     local scope, now = guildScope(), GetTime()
     if not scope then return end
     local count = 0
@@ -700,8 +807,9 @@ local function queueGuildRequest(raw, id)
             count = count + 1
         end
     end
-    if pendingGuildRequests[raw] or count >= maxPendingRequests then return end
-    pendingGuildRequests[raw] = {id = id, scope = scope, at = now}
+    local key = (automatic and "U" or "P") .. raw
+    if pendingGuildRequests[key] or count >= maxPendingRequests then return end
+    pendingGuildRequests[key] = {raw = raw, id = id, scope = scope, at = now, automatic = automatic}
     addon.ReadRoster()
     if next(pendingGuildRequests) then addon.RefreshRoster() end
 end
@@ -793,6 +901,42 @@ local function requestLink(_, _, link, _, mouseButton)
     end
 end
 
+local function liveAutomaticRequest(owner)
+    return owner and owner.automatic and owner.scope == guildScope() and owner.syncRevision == autoSyncRevision
+        and GetTime() - owner.at < requestLifetime and autoSyncSettings()
+end
+
+local function reviewableRecords(entries, reviewed)
+    local candidates = {}
+    if reviewed then
+        for key in pairs(reviewed) do
+            if not entries[key] then reviewed[key] = nil end
+        end
+    end
+    for key, record in pairs(entries) do
+        if not reviewed or reviewed[key] ~= recordRevision(record) then candidates[key] = record end
+    end
+    local _, _, changes = addon.Merge(candidates, true, true)
+    local result = {}
+    for _, change in ipairs(changes or {}) do
+        local key = change.entry or change.key
+        result[key] = candidates[key]
+    end
+    return result
+end
+
+local function sameAutomaticReply(previous, entries, identity)
+    if not previous or not previous.automatic or previous.identity ~= identity then return false end
+    for key, record in pairs(entries) do
+        local old = previous.entries[key]
+        if not old or old.note ~= record.note or old.high ~= record.high or old.deaths ~= record.deaths then return false end
+    end
+    for key in pairs(previous.entries) do
+        if not entries[key] then return false end
+    end
+    return true
+end
+
 local function finish(sender, batch)
     incoming[sender] = nil
     local entries = {}
@@ -812,9 +956,28 @@ local function finish(sender, batch)
         if owner.received[sender] then return end
         owner.received[sender] = true
         local current = inbox()
+        if owner.automatic then
+            local settings = liveAutomaticRequest(owner)
+            if not settings then return end
+            local previous = current[sender]
+            if previous and owner.at < previous.at then return end
+            entries = reviewableRecords(entries, settings.reviewed[batch.identity])
+            if not next(entries) then
+                if previous and previous.automatic then
+                    current[sender] = nil
+                    addon.RefreshUI()
+                end
+                return
+            end
+            if sameAutomaticReply(previous, entries, batch.identity) then
+                previous.at = owner.at
+                return
+            end
+        end
         if not current[sender] or owner.at >= current[sender].at then
-            current[sender] = {sender = roster[sender].name, entries = entries, at = owner.at, identity = batch.identity}
-            if not owner.notified then
+            current[sender] = {sender = roster[sender].name, entries = entries, at = owner.at, identity = batch.identity,
+                automatic = owner.automatic}
+            if not owner.automatic and not owner.notified then
                 owner.notified = true
                 addon.Say(L("watchlistReplyArrived"))
             end
@@ -876,12 +1039,38 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         return
     end
     if channel == "GUILD" then
-        local id = message:match("^P\t([%da-f]+%.[%da-f]+)$")
-        if id and #id <= 16 then queueGuildRequest(senderName, id) end
+        local mode, id = message:match("^([PU])\t([%da-f]+%.[%da-f]+)$")
+        if id and #id <= 16 then queueGuildRequest(senderName, id, mode == "U") end
         return
     end
     local sender, _, identity = addon.GuildSender(senderName)
     if not sender or sender == addon.UnitName("player") then return end
+    -- J proposes a reply to U; K proposes the return transfer to the same peer.
+    -- Either transfer needs a private C response before any records are sent.
+    local direction, autoProbe, autoID = message:match("^([JK])\t([%da-f]+%.[%da-f]+)\t([%da-f]+%.[%da-f]+)$")
+    if autoProbe then
+        local owner
+        if direction == "J" then
+            owner = requestedLists[autoID]
+        else
+            owner = automaticReplies[sender]
+            if not owner or owner.id ~= autoID or not owner.sentProbe then return end
+        end
+        if #autoProbe <= 16 and liveAutomaticRequest(owner) and not owner.verified[sender] then
+            local reply = ("C\t%s\t%s"):format(autoProbe, capabilities)
+            if C_ChatInfo.SendAddonMessage(prefix, reply, "WHISPER", roster[sender].address) == results.Success then
+                owner.verified[sender] = { id = autoProbe, identity = identity }
+                if direction == "J" then
+                    local transfer = makePackets(nil, false, autoID)
+                    if transfer then
+                        transfer.automatic, transfer.reciprocal, transfer.syncRevision = true, true, owner.syncRevision
+                        startTransfer(sender, transfer)
+                    end
+                end
+            end
+        end
+        return
+    end
     local requestID = message:match("^Q\t([%da-f]+%.[%da-f]+)$")
     if requestID then
         local offer, now = published[requestID], GetTime()
@@ -927,8 +1116,16 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     if operation == "B" then
         local number, pullID = data:match("^(%d+)\t([%da-f]+%.[%da-f]+)$")
         local owner = pullID and requestedLists[pullID]
+        local verified = owner and owner.verified and owner.verified[sender]
+        local reciprocal = pullID and automaticReplies[sender]
+        if reciprocal and reciprocal.id == pullID then
+            local peer = reciprocal.verified[sender]
+            if peer and peer.id == id then owner, verified = reciprocal, peer end
+        end
         if pullID and (not owner or owner.scope ~= guildScope()
-            or now - owner.at >= requestLifetime or owner.received[sender]) then
+            or now - owner.at >= requestLifetime or owner.received[sender]
+            or (owner.automatic and (not verified or verified.id ~= id or verified.identity ~= identity
+                or not liveAutomaticRequest(owner)))) then
             return
         end
         local count = tonumber(number or data:match("^%d+$"))
@@ -953,7 +1150,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         if senderRank then
             batch.version = data
             batch.explicit = senderRank >= 2004000
-            if senderRank > installedRank then
+            if senderRank > installedRank and not (batch.pull and batch.pull.automatic) then
                 addon.Say(L("shareNewerVersion", data, downloadLink()))
             end
             if batch.pull and batch.count == 0 then finish(sender, batch) end
@@ -1033,7 +1230,9 @@ end
 
 function addon.InitSync()
     GuildAvengerDB.autoReplyGuilds = GuildAvengerDB.autoReplyGuilds or {}
+    GuildAvengerDB.autoSyncGuilds = GuildAvengerDB.autoSyncGuilds or {}
     GuildAvengerDB.replyToListRequests = nil
+    C_Timer.NewTicker(30, addon.CheckWatchlistSync)
     C_ChatInfo.RegisterAddonMessagePrefix(prefix)
     local addFilter = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter or ChatFrame_AddMessageEventFilter
     if addFilter then addFilter("CHAT_MSG_GUILD", chatFilter) end

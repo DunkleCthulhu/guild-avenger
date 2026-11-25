@@ -91,6 +91,8 @@ In 3.3.1, automatic replies are off until you apply permission for the current c
 
 In 3.4.2, open **Requests → Request guild watchlists** to ask the guild. If a guildmate needs to reply manually, they see an on-screen notice and an **Open requests** link in chat. In **Requests**, they can send their current list or dismiss the request. Requests stay available for five minutes. **Inbox** shows replies for review before any entries are added.
 
+In 3.4.5, enable **Settings → Automatically exchange watchlists** for a two-way sync with online guildmates who enabled the same option. It starts when your guild roster is ready after login and checks again hourly. **Inbox** shows new or changed entries for approval. Entries reviewed and skipped stay out of automatic results until their contents change. Automatic checks stay quiet in chat and use the current character and guild's setting.
+
 ## Guild sightings
 
 Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.
