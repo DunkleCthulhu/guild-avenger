@@ -249,7 +249,8 @@ function addon.RefreshUI()
     local showRequests = requestsWindow and requestsWindow:IsShown()
     if not showPanel and not showRequests then return end
     local requests = addon.WatchlistRequests()
-    if showRequests then requestsWindow:Render(requests) end
+    local replies = addon.InboxCount()
+    if showRequests then requestsWindow:Render(requests, replies) end
     if not showPanel then return end
     local scope = addon.Scope()
     if panel.scope ~= scope then
@@ -288,7 +289,6 @@ function addon.RefreshUI()
     enabled(panel.share, ready and scope ~= "local")
     enabled(panel.pull, ready and scope ~= "local")
     panel.pull.label:SetText(L("watchlistRequestsButton", #requests))
-    local replies = addon.InboxCount()
     enabled(panel.inbox, replies > 0)
     panel.inbox.label:SetText(L("inboxButton", replies))
     panel.share.label:SetText(selected > 0 and L("shareCount", selected) or L("shareWatchlist"))
@@ -360,8 +360,7 @@ function addon.OpenWatchlistRequests()
         previousPage:SetPoint("RIGHT", nextPage, "LEFT", -5, 0)
         local pageLabel = label(root, "GameFontHighlightSmall", color.muted)
         pageLabel:SetPoint("RIGHT", previousPage, "LEFT", -7, 0)
-        function root:Render(requests)
-            local replies = addon.InboxCount()
+        function root:Render(requests, replies)
             enabled(inbox, replies > 0)
             inbox.label:SetText(L("inboxButton", replies))
             enabled(request, addon.GuildScope() ~= nil)
@@ -559,9 +558,10 @@ function addon.PromptSettings()
         label(root, "GameFontNormalLarge", color.gold, L("settingsTitle")):SetPoint("TOPLEFT", 20, -17)
         label(root, "GameFontHighlight", color.white, L("language")):SetPoint("TOPLEFT", 20, -55)
 
-        local dropdown = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
-        dropdown:SetPoint("TOPRIGHT", -20, -48)
-        dropdown:SetWidth(230)
+        local english = checkbox(root, 185, -48, addon.TextFor("enUS", "languageEnglish"))
+        local ukrainian = checkbox(root, 292, -48, addon.TextFor("ukUA", "languageUkrainian"))
+        english:SetHitRectInsets(0, -76, 0, 0)
+        ukrainian:SetHitRectInsets(0, -100, 0, 0)
         local message = label(root, "GameFontHighlightSmall", color.muted, L("languageHint"))
         message:SetPoint("TOPLEFT", 20, -92)
         message:SetPoint("TOPRIGHT", -20, -92)
@@ -597,29 +597,25 @@ function addon.PromptSettings()
         local duration = CreateFrame("DropdownButton", nil, root, "WowStyle1DropdownTemplate")
         duration:SetPoint("TOPRIGHT", -20, -349)
         duration:SetWidth(230)
+        local selectedDuration, updateApply
         duration:SetupMenu(function(_, menu)
-            local function isSelected(seconds) return alertDuration() == seconds end
-            local function selectDuration(seconds) GuildAvengerDB.alertDuration = seconds end
+            local function isSelected(seconds) return selectedDuration == seconds end
+            local function selectDuration(seconds)
+                selectedDuration = seconds
+                updateApply()
+            end
             for _, seconds in ipairs(alertDurations) do
                 menu:CreateRadio(L("alertSeconds", seconds), isSelected, selectDuration, seconds)
             end
         end)
         local minimap = checkbox(root, 17, -384, L("showMinimapButton"))
-        minimap:SetScript("OnClick", function(self) addon.SetMinimapShown(self:GetChecked() == true) end)
 
         local scope, identity, privacyReady, savedReply, savedSync, savedAttackers
         label(root, "GameFontHighlight", color.white, L("sightings")):SetPoint("TOPLEFT", 20, -421)
-        local sightings = {}
+        local sightings, savedSightings = {}, {}
         local titles = { send = "sightingSend", receive = "sightingReceive", popup = "sightingPopup" }
         for index, setting in ipairs({ "send", "receive", "popup" }) do
             local check = checkbox(root, 17, -417 - index * 27, L(titles[setting]))
-            check:SetScript("OnClick", function(self)
-                local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
-                if currentScope and currentScope == scope and currentIdentity == identity then
-                    addon.SetSightingSetting(setting, self:GetChecked() == true)
-                end
-                root.RefreshGuild()
-            end)
             sightings[setting] = check
         end
 
@@ -641,45 +637,51 @@ function addon.PromptSettings()
         apply:SetPoint("BOTTOMRIGHT", -20, 15)
         button(root, L("cancel"), 90, function() root:Hide() end):SetPoint("BOTTOMLEFT", 20, 15)
         local function sharingChanged()
-            return privacyReady and ((reply:GetChecked() == true) ~= savedReply
+            if not privacyReady then return false end
+            for setting, check in pairs(sightings) do
+                if (check:GetChecked() == true) ~= savedSightings[setting] then return true end
+            end
+            return (reply:GetChecked() == true) ~= savedReply
                 or (sync:GetChecked() == true) ~= savedSync
-                or (attackers:GetChecked() == true) ~= savedAttackers)
+                or (attackers:GetChecked() == true) ~= savedAttackers
         end
-        local function updateApply()
+        updateApply = function()
+            english:SetChecked(selected == "enUS")
+            ukrainian:SetChecked(selected == "ukUA")
             local languageChanged = selected ~= GuildAvengerDB.language
-            enabled(apply, languageChanged or sharingChanged())
+            enabled(apply, languageChanged or sharingChanged() or selectedDuration ~= alertDuration()
+                or (minimap:GetChecked() == true) ~= (not GuildAvengerDB.minimapHidden))
             local reloadNeeded = GuildAvengerDB.language ~= addon.Language()
             message:SetText(L(not languageChanged and reloadNeeded and "languageSaved" or "languageHint"))
         end
         root.RefreshGuild = function()
             local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
             privacyReady = currentScope ~= nil
-            if privacyReady and (currentScope ~= scope or currentIdentity ~= identity) then
+            if currentScope ~= scope or currentIdentity ~= identity then
                 scope, identity = currentScope, currentIdentity
                 savedReply, savedAttackers = addon.AutoReplyEnabled(), addon.AttackerSharing()
                 savedSync = addon.AutoSyncWatchlistsEnabled()
                 reply:SetChecked(savedReply)
                 sync:SetChecked(savedSync)
                 attackers:SetChecked(savedAttackers)
+                for setting, check in pairs(sightings) do
+                    savedSightings[setting] = addon.SightingSetting(setting)
+                    check:SetChecked(savedSightings[setting])
+                end
             end
             reply:SetEnabled(privacyReady)
             sync:SetEnabled(privacyReady)
             attackers:SetEnabled(privacyReady)
-            for setting, check in pairs(sightings) do
+            for _, check in pairs(sightings) do
                 check:SetEnabled(privacyReady)
-                check:SetChecked(privacyReady and addon.SightingSetting(setting))
             end
             local hintKey = IsInGuild() and "privacyWaitingGuild" or "privacyNoGuild"
             status(guildMessage, true, L(privacyReady and "privacySettingsHint" or hintKey))
             updateApply()
         end
         apply:SetScript("OnClick", function()
-            local languageChanged = selected ~= GuildAvengerDB.language
-            GuildAvengerDB.language = selected
-            if languageChanged and selected ~= addon.Language() then
-                showTextWindow(L("languageSaved"), L("languageReloadTitle"))
-            end
-            if sharingChanged() then
+            local saveSharing = sharingChanged()
+            if saveSharing then
                 local ready = addon.UpdateScope()
                 local currentScope, currentIdentity = addon.GuildPrivacyIdentity()
                 if not ready or currentScope ~= scope or currentIdentity ~= identity then
@@ -687,8 +689,22 @@ function addon.PromptSettings()
                     status(guildMessage, false, L("guildPrivacyChanged"))
                     return
                 end
+            end
+            local languageChanged = selected ~= GuildAvengerDB.language
+            GuildAvengerDB.language = selected
+            GuildAvengerDB.alertDuration = selectedDuration
+            addon.SetMinimapShown(minimap:GetChecked() == true)
+            if languageChanged and selected ~= addon.Language() then
+                showTextWindow(L("languageSaved"), L("languageReloadTitle"))
+            end
+            if saveSharing then
                 local nextReply, nextAttackers = reply:GetChecked() == true, attackers:GetChecked() == true
                 local nextSync = sync:GetChecked() == true
+                for setting, check in pairs(sightings) do
+                    local value = check:GetChecked() == true
+                    if value ~= savedSightings[setting] then addon.SetSightingSetting(setting, value) end
+                    savedSightings[setting] = value
+                end
                 if nextReply ~= savedReply then addon.SetAutoReply(nextReply) end
                 if nextSync ~= savedSync then addon.SetAutoSyncWatchlists(nextSync) end
                 if nextAttackers ~= savedAttackers then addon.SetAttackerSharing(nextAttackers) end
@@ -701,11 +717,24 @@ function addon.PromptSettings()
                 root:Hide()
             end
         end)
+        english:SetScript("OnClick", function()
+            selected = "enUS"
+            updateApply()
+        end)
+        ukrainian:SetScript("OnClick", function()
+            selected = "ukUA"
+            updateApply()
+        end)
         reply:SetScript("OnClick", updateApply)
+        minimap:SetScript("OnClick", updateApply)
+        for _, check in pairs(sightings) do check:SetScript("OnClick", updateApply) end
         sync:SetScript("OnClick", updateApply)
         attackers:SetScript("OnClick", updateApply)
         root:SetScript("OnShow", function()
             selected = GuildAvengerDB.language
+            selectedDuration = alertDuration()
+            minimap:SetChecked(not GuildAvengerDB.minimapHidden)
+            for _, check in pairs(sightings) do check:SetChecked(false) end
             scope, identity = nil, nil
             reply:SetChecked(false)
             sync:SetChecked(false)
@@ -714,20 +743,7 @@ function addon.PromptSettings()
             addon.ReadRoster()
             addon.RefreshRoster()
             root.RefreshGuild()
-            dropdown:GenerateMenu()
             duration:GenerateMenu()
-            minimap:SetChecked(not GuildAvengerDB.minimapHidden)
-        end)
-        dropdown:SetupMenu(function(_, menu)
-            local function isSelected(language)
-                return selected == language
-            end
-            local function selectLanguage(language)
-                selected = language
-                updateApply()
-            end
-            menu:CreateRadio(L("languageEnglish"), isSelected, selectLanguage, "enUS")
-            menu:CreateRadio(L("languageUkrainian"), isSelected, selectLanguage, "ukUA")
         end)
         settingsWindow = root
     end
@@ -1649,7 +1665,9 @@ local function renderReview()
     end
     local selected = selectionSize(offer.selected)
     review.count:SetText(L("reviewCount", selected, #offer.changes))
-    enabled(review.confirm, selected > 0 or (offer.replyCount ~= nil and #offer.changes == 0))
+    review.confirm.label:SetText(L(offer.replyCount and selected == 0 and
+        (#offer.changes == 0 and "done" or "skipAll") or "accept"))
+    enabled(review.confirm, selected > 0 or offer.replyCount ~= nil)
 end
 
 local function selectAll(value, additionsAndCountsOnly)
@@ -1806,7 +1824,6 @@ local function showReview(offer)
     review.sender:SetText(offer.replyCount and L("inboxSenders", offer.replyCount) or L("sender", offer.sender))
     review.summary:SetText(L("reviewSummary", offer.added, offer.updated, offer.removed or 0))
     review.selectNew:SetShown(offer.replyCount ~= nil)
-    review.confirm.label:SetText(L(offer.replyCount and #offer.changes == 0 and "done" or "accept"))
     review.cancel.label:SetText(L(offer.replyCount and "close" or "decline"))
     review.empty:SetShown(#offer.changes == 0)
     local maximum = math.max(0, #offer.changes - rowCount)
@@ -1845,6 +1862,7 @@ function addon.OfferImport(sender, preview)
     if #offers >= 10 then return end
     offers[#offers + 1] = {sender = sender, preview = preview}
     presentOffer()
+    return true
 end
 
 local menusRegistered

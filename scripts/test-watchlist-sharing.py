@@ -1,13 +1,14 @@
 """Run from the repository checkout with Python and lupa installed."""
 
 from collections import deque
+import os
 from pathlib import Path
 import unittest
 
 from lupa.lua51 import LuaRuntime
 
 
-ADDON = Path(__file__).resolve().parents[1] / "GuildAvenger"
+ADDON = Path(os.environ.get("GUILD_AVENGER_TEST_ADDON", Path(__file__).resolve().parents[1] / "GuildAvenger"))
 SOURCES = {
     name: (ADDON / name).read_text(encoding="utf-8")
     for name in (ADDON / "GuildAvenger.toc").read_text(encoding="utf-8").splitlines()
@@ -95,7 +96,7 @@ function methods:GetID() return self.id end
 for name in ([[
     SetPoint SetSize SetTextColor SetWidth SetHeight SetMaxLines SetJustifyH SetJustifyV
     SetWordWrap SetNonSpaceWrap SetAlpha SetFontObject SetAutoFocus SetMaxBytes SetTextInsets EnableMouse
-    ClearFocus SetBackdrop SetClampedToScreen RegisterEvent SetFrameLevel SetMouseClickEnabled
+    ClearFocus SetBackdrop SetClampedToScreen RegisterEvent SetFrameLevel SetMouseClickEnabled SetHitRectInsets
     SetTexture SetTexCoord SetNormalTexture SetPressedTexture SetHighlightTexture SetAllPoints
     SetOrientation SetValueStep SetObeyStepOnDrag SetMinMaxValues SetThumbTexture EnableMouseWheel
     SetFocus HighlightText SetMultiLine SetScrollChild ClearAllPoints
@@ -163,9 +164,8 @@ UIErrorsFrame = { AddMessage=function(_,text) table.insert(notices,text) end }
 C_Timer = {
     After=function(delay, callback) table.insert(jobs, {due=mockTime+delay, callback=callback}) end,
     NewTicker=function(seconds, callback)
-        -- Only run transfer and map timers. Patrol and statistics are outside these tests.
         local ticker = {due=mockTime+seconds, interval=seconds, callback=callback, Cancel=function(self) self.cancelled=true end}
-        if seconds == 0.25 or seconds == 5 or seconds == 30 then table.insert(jobs, ticker) end
+        table.insert(jobs, ticker)
         return ticker
     end
 }
@@ -286,7 +286,7 @@ end
 
 
 class Client:
-    def __init__(self, wire, name, index, language, version):
+    def __init__(self, wire, name, index, language, version, sources=None):
         self.wire = wire
         self.name = name
         self.address = name + "-Layer42"
@@ -302,7 +302,7 @@ class Client:
         self.g.GuildAvengerDB = self.lua.table(language=language)
         self.lua.execute(WOW, name="WoW API harness")
         self.addon = self.lua.table()
-        for name, source in SOURCES.items():
+        for name, source in (sources or SOURCES).items():
             self.lua.compile(source, name=name)("GuildAvenger", self.addon)
 
     def member(self):
@@ -344,12 +344,12 @@ class Client:
 
 
 class Wire:
-    def __init__(self, members):
+    def __init__(self, members, sources_by_version=None):
         self.time = 100
         self.packets, self.pending, self.messages = [], deque(), []
         self.error = None
         self.bare_guild_sender = False
-        self.players = [Client(self, name, index, language, version)
+        self.players = [Client(self, name, index, language, version, (sources_by_version or {}).get(version))
                         for index, (name, language, version) in enumerate(members)]
         for player in self.players:
             player.g.fire("ADDON_LOADED", "GuildAvenger")
@@ -440,9 +440,8 @@ class SharingTests(unittest.TestCase):
         addon.PromptSettings()
         settings = frames.GuildAvengerSettings
         self.check_draggable_window(settings)
-        language = next(child for child in settings.children.values()
-                        if child.kind == "DropdownButton" and child.menu[self.anna.text("languageUkrainian")])
-        language.menu[self.anna.text("languageUkrainian")]()
+        ukrainian = self.language_choices(self.anna)["Українська"]
+        ukrainian.scripts.OnClick(ukrainian)
         self.anna.click("GuildAvengerSettings", "applySettings")
         comment = frames.GuildAvengerComment
         self.assertGreater(comment.level, settings.level)
@@ -456,6 +455,55 @@ class SharingTests(unittest.TestCase):
         link = frames.GuildAvengerDownload
         self.assertGreater(link.level, report.level)
         self.check_draggable_window(link)
+
+    def language_choices(self, player):
+        window = player.g.GuildAvengerSettings
+        return {label.text: choice for choice in window.children.values()
+                if choice.kind == "CheckButton" and choice.IsShown(choice) and choice.enabled
+                for label in choice.children.values() if label.text in ("English", "Українська")}
+
+    def test_language_switch_both_directions_on_existing_profiles(self):
+        for player, before, after, current_label, new_label in [
+            (self.anna, "enUS", "ukUA", "English", "Українська"),
+            (self.bohdan, "ukUA", "enUS", "Українська", "English"),
+        ]:
+            with self.subTest(language=before):
+                player.g.club = None
+                player.g.fire("PLAYER_GUILD_UPDATE")
+                player.g.SlashCmdList.GUILDAVENGER("settings")
+                choices = self.language_choices(player)
+                self.assertEqual(set(choices), {"English", "Українська"})
+                self.assertTrue(choices[current_label].checked)
+                self.assertFalse(choices[new_label].checked)
+                choice = choices[new_label]
+                choice.scripts.OnClick(choice)
+                self.assertTrue(choice.checked)
+                self.assertFalse(choices[current_label].checked)
+                player.click("GuildAvengerSettings", "cancel")
+                self.assertEqual(player.g.GuildAvengerDB.language, before)
+                player.addon.PromptSettings()
+                self.assertTrue(choices[current_label].checked)
+                choice.scripts.OnClick(choice)
+                player.click("GuildAvengerSettings", "applySettings")
+                self.assertEqual(player.g.GuildAvengerDB.language, after)
+                self.assertIn("/reload", player.g.GuildAvengerComment.text.text)
+                self.assertEqual(player.addon.Language(), before)
+
+                # WoW reloads all Lua files while retaining the account's SavedVariables.
+                player.lua.execute("eventFrame=nil; jobs={}")
+                player.addon = player.lua.table()
+                for name, source in SOURCES.items():
+                    player.lua.compile(source, name=name)("GuildAvenger", player.addon)
+                player.g.fire("ADDON_LOADED", "GuildAvenger")
+                player.g.fire("PLAYER_ENTERING_WORLD")
+                self.assertEqual(player.addon.Language(), after)
+                self.assertEqual(player.g.GetLocale(), before)
+                player.g.SlashCmdList.GUILDAVENGER("settings")
+                self.assertTrue(self.language_choices(player)[new_label].checked)
+                self.assertTrue(player.g.hasButton("GuildAvengerSettings",
+                                                   player.addon.TextFor(after, "applySettings")))
+                player.g.SlashCmdList.GUILDAVENGER("ui")
+                self.assertTrue(player.g.hasButton("GuildAvengerPanel", player.addon.TextFor(after, "statistics")))
 
     def test_requests_badge_chat_click_and_selective_import(self):
         self.wire.bare_guild_sender = True

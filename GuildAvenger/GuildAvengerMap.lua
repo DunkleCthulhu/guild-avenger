@@ -57,9 +57,12 @@ end
 
 function addon.RecordLocalMapSighting(key, name, guild)
     if not C_Map or not C_Map.GetMapInfo then return end
+    local scope = addon.Scope()
+    local previous = localSightings[key]
+    if previous and previous.scope == scope and previous.guild == guild and GetTime() - previous.at < recordInterval then return end
     local inside = IsInInstance()
     if not addon.Ordinary(inside) or inside == true or inside == 1 then return end
-    local place = { name = name, guild = guild, scope = addon.Scope() }
+    local place = { name = name, guild = guild, scope = scope }
     place.mapID = addon.Location(place)
     store(localSightings, key, place)
 end

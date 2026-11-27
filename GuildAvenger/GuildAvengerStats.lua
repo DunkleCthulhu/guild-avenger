@@ -4,7 +4,7 @@ local prefix = "GuildAvStats1"
 local maxCount = 2147483647
 local results = Enum.SendAddonMessageResult
 local journalLimit = 100
-local heldDeath, latestDeath, sendTicker, lastRequest, lastReply
+local heldDeath, latestDeath, sendTicker, lastRequest, lastReply, pendingReply
 local statsRevision, attackersRevision = 0, 0
 
 local function isNumber(value)
@@ -29,7 +29,12 @@ local function ownScore()
     local guild, scope = guildData()
     local key, name = addon.UnitName("player")
     if not guild or not key then return end
-    if not guild.own[key] then guild.own[key] = { kills = 0, enemies = {} } end
+    if not guild.own[key] then
+        local oldKey = addon.LegacyLowerName(name)
+        local old = guild.own[oldKey]
+        guild.own[oldKey] = nil
+        guild.own[key] = old or { kills = 0, enemies = {} }
+    end
     return guild.own[key], scope, key, name
 end
 
@@ -295,6 +300,31 @@ function addon.RequestStats()
     return L("statsRequestSent")
 end
 
+local function scheduleReply(score, scope)
+    if not score.share or (pendingReply and pendingReply.score == score and pendingReply.revision == statsRevision) then return end
+    local job = {score = score, revision = statsRevision}
+    pendingReply = job
+    local delay = math.random(4, 28) / 10
+    if lastReply and lastReply.scope == scope then
+        delay = math.max(delay, 45 - (GetTime() - lastReply.at))
+    end
+    local function reply()
+        if pendingReply ~= job then return end
+        if statsRevision ~= job.revision or not score.share or addon.GuildScope() ~= scope or ownScore() ~= score then
+            pendingReply = nil
+            return
+        end
+        if sendTicker then
+            C_Timer.After(1, reply)
+            return
+        end
+        pendingReply = nil
+        lastReply = {at = GetTime(), scope = scope}
+        publish()
+    end
+    C_Timer.After(delay, reply)
+end
+
 function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix
         or not addon.IsText(channel) or channel ~= "GUILD" or not addon.IsText(message) or #message > 180 then return end
@@ -302,13 +332,7 @@ function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     local own, scope, ownKey = ownScore()
     if not own or not key or key == ownKey then return end
     if message == "Q" then
-        local now = GetTime()
-        if own.share and (not lastReply or lastReply.scope ~= scope or now - lastReply.at >= 45) then
-            lastReply = {at = now, scope = scope}
-            C_Timer.After(math.random(4, 28) / 10, function()
-                if addon.Scope() == scope and ownScore() == own then publish() end
-            end)
-        end
+        scheduleReply(own, scope)
         return
     end
     local kills = tonumber(message:match("^R\t(%d+)$"))

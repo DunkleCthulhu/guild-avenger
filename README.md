@@ -95,6 +95,10 @@ In 3.4.5, enable **Settings → Automatically exchange watchlists** for a two-wa
 
 From 3.4.6, the Inbox badge counts only replies with changes left to review. Automatic exchange keeps your comment when a guildmate first shares an existing entry or repeats the same comment. A later edit by that guildmate can appear for review. Manual sharing can still show different comments.
 
+### Reviewing shared lists
+
+Direct shares between players on 3.4.8 or later confirm when the recipient's addon queues the list for review. Older recipients can still import the list. Unreviewed replies to guild requests survive a UI reload for the same character and guild. In the inbox, clear the checkboxes and choose **Skip all** to finish, or **Close** to come back later. Hourly sync preserves a locally edited priority when a peer sends only a higher death count.
+
 ## Guild sightings
 
 Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.

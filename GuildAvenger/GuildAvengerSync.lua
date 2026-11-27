@@ -8,11 +8,12 @@ local results = Enum.SendAddonMessageResult
 local roster, rosterScope, rosterRequestedAt = {}, nil, nil
 local sending, ticker, sequence = nil, nil, 0
 local incoming = {}
+local receipts = {}
 local published, waiting = {}, {}
 local requestedLists, guildRequests = {}, {}
 local pendingGuildRequests = {}
 local pendingWhispers = {}
-local pullInbox, inboxScope = {}, nil
+local pullInbox, inboxScope, inboxCharacter = {}, nil, nil
 local lastListRequest
 local hourlyInterval, loginSyncPending = 3600, true
 local automaticReplies, automaticReplyScope = {}, nil
@@ -20,6 +21,7 @@ local requestLifetime = 300
 local requestCooldown = 60
 local rosterWait, maxPendingRequests = 15, 32
 local maxPendingWhispers = 128
+local whisperWait = 60
 local autoReplyRevision = 0
 local autoSyncRevision = 0
 local packetLimit = 240
@@ -76,8 +78,18 @@ local guildScope = addon.GuildScope
 
 local function inbox()
     local scope = guildScope()
-    if inboxScope ~= scope then
-        pullInbox, inboxScope = {}, scope
+    local guid = UnitGUID("player")
+    local character = addon.IsText(guid) and guid:match("^Player%-%d+%-%x+$") or nil
+    if inboxScope ~= scope or inboxCharacter ~= character then
+        inboxScope, inboxCharacter, pullInbox = scope, character, {}
+        if scope and character then
+            local saved = GuildAvengerDB.watchlistInbox
+            saved[character] = saved[character] or {}
+            saved[character][scope] = saved[character][scope] or {}
+            pullInbox = saved[character][scope]
+            -- Request ordering uses session time. Every new request follows the restored replies.
+            for _, reply in pairs(pullInbox) do reply.at = 0 end
+        end
     end
     return pullInbox
 end
@@ -104,7 +116,7 @@ end
 
 local function changesRecord(record, own)
     return not own or reviewNote(record, own) ~= own.note or record.deaths > own.deaths
-        or (record.high == true) ~= (own.high == true)
+        or (not record.keepLocalPriority and (record.high == true) ~= (own.high == true))
 end
 
 local function hasReviewableChange(key, record)
@@ -147,6 +159,7 @@ function addon.PreviewInbox()
     local scope = guildScope()
     local replies = reviewableReplies()
     local senders, combined, notes, sources, existing = {}, {}, {}, {}, {}
+    local proposedPriority = {}
     for key in pairs(replies) do senders[#senders + 1] = key end
     if #senders == 0 then return end
     table.sort(senders)
@@ -158,12 +171,14 @@ function addon.PreviewInbox()
             if not combined[key] then
                 local copy = {}
                 for field, value in pairs(record) do copy[field] = value end
-                copy.note, copy.keepLocalNote = note, nil
+                copy.note, copy.keepLocalNote, copy.keepLocalPriority = note, nil, nil
                 combined[key], sources[key], notes[key] = copy, {}, {}
             end
             local item = combined[key]
             item.deaths = math.max(item.deaths, record.deaths)
-            item.high = item.high or record.high
+            if not existing[key] or not record.keepLocalPriority then
+                proposedPriority[key] = proposedPriority[key] or record.high == true
+            end
             sources[key][#sources[key] + 1] = reply.sender
             local noteSources = notes[key][note] or {}
             noteSources[#noteSources + 1] = reply.sender
@@ -171,6 +186,11 @@ function addon.PreviewInbox()
         end
     end
     for key, item in pairs(combined) do
+        if proposedPriority[key] == nil and existing[key] then
+            item.high = existing[key].high
+        else
+            item.high = proposedPriority[key] or nil
+        end
         if existing[key] and item.note == existing[key].note then
             local alternatives = {}
             for note in pairs(notes[key]) do
@@ -239,7 +259,9 @@ local function readMember(index)
     local key, name, suffix = rosterName(raw)
     if not key then return end
     local address = addon.Clean(raw, addon.NameLimit + 64)
-    local identity = key .. "\t" .. (suffix or "") .. "\t" .. (addon.IsText(guid) and guid or "")
+    -- Keep existing per-character consent and review history keyed to the same roster identity.
+    local oldSuffix = suffix and addon.LegacyLowerName(raw:match("%-([^ %-]+)$") or suffix) or ""
+    local identity = addon.LegacyLowerName(name) .. "\t" .. oldSuffix .. "\t" .. (addon.IsText(guid) and guid or "")
     return key, {name = name, address = address, suffix = suffix, identity = identity, index = index,
         online = addon.Ordinary(online) and online == true, leader = addon.Ordinary(rank) and rank == 0}
 end
@@ -273,7 +295,7 @@ function addon.ReadRoster()
         local queued, now = pendingWhispers, GetTime()
         pendingWhispers = {}
         for _, packet in ipairs(queued) do
-            if packet.scope == scope and now - packet.at < rosterWait then
+            if packet.scope == scope and now - packet.at < whisperWait then
                 addon.Receive(prefix, packet.message, "WHISPER", packet.sender)
             end
         end
@@ -403,6 +425,9 @@ function addon.SuggestRecipients(value)
 end
 
 local function snapshotCurrent(transfer)
+    for key, removal in pairs(transfer.removals) do
+        if addon.RemovalRecord(key) ~= removal or addon.WatchlistRecord(key) then return false end
+    end
     for key, guard in pairs(transfer.records) do
         local record = addon.WatchlistRecord(key)
         if record ~= guard.record or record.note ~= guard.note or record.author ~= guard.author then return false end
@@ -446,7 +471,7 @@ local function stopSending(message, success)
     end
     finishReply(completed.transfer.request, success)
     if completed.transfer.request then addon.WatchlistReplyStatus(success, message) end
-    if not completed.quiet then addon.Say(message) end
+    if message and not completed.quiet then addon.Say(message) end
 end
 
 local function sendNext()
@@ -486,7 +511,19 @@ local function sendNext()
     sending.position = sending.position + 1
     sending.progressAt = GetTime()
     if sending.position > #sending.packets then
-        stopSending(L("transferDone", member.name), true)
+        if transfer.pullID or offer then
+            stopSending(L("transferDispatched", member.name), true)
+        else
+            local id = transfer.id
+            local receipt = {scope = sending.scope, key = sending.key, identity = sending.identity}
+            receipts[id] = receipt
+            C_Timer.After(whisperWait + 5, function()
+                if receipts[id] ~= receipt then return end
+                receipts[id] = nil
+                if receipt.scope == guildScope() then addon.Say(L("transferUnconfirmed", member.name)) end
+            end)
+            stopSending(nil, true)
+        end
     end
 end
 
@@ -594,7 +631,7 @@ function addon.Share(input, selection, includeRemovals)
 end
 
 makePackets = function(selection, includeRemovals, pullID)
-    local entries, guards = {}, {}
+    local entries, guards, removalGuards = {}, {}, {}
     local removals = includeRemovals and not selection and addon.RemovalProposals() or {}
     for _, entry in ipairs(addon.Entries()) do
         local entryKey = addon.RecordKey(entry)
@@ -617,6 +654,7 @@ makePackets = function(selection, includeRemovals, pullID)
     if #removals > 0 then
         packets[#packets + 1] = ("D\t%s\t%d"):format(id, #removals)
         for _, entry in ipairs(removals) do
+            removalGuards[addon.RecordKey(entry)] = entry
             packets[#packets + 1] = ("X\t%s\t%s\t%s"):format(id, entry.kind, entry.name)
         end
     end
@@ -653,7 +691,7 @@ makePackets = function(selection, includeRemovals, pullID)
         end
     end
     flush()
-    return {packets = packets, packed = packed, id = id, records = guards, pullID = pullID}
+    return {packets = packets, packed = packed, id = id, records = guards, removals = removalGuards, pullID = pullID}
 end
 
 enqueue = function(key, transfer, offer, revision, packed)
@@ -950,9 +988,9 @@ local function requestLink(_, _, link, _, mouseButton)
     end
 end
 
-local function liveAutomaticRequest(owner)
+local function permittedAutomaticRequest(owner)
     return owner and owner.automatic and owner.scope == guildScope() and owner.syncRevision == autoSyncRevision
-        and GetTime() - owner.at < requestLifetime and autoSyncSettings()
+        and autoSyncSettings()
 end
 
 local function noteRevision(revision)
@@ -978,6 +1016,9 @@ local function reviewableRecords(entries, reviewed)
                 if own and (not previous or noteRevision(previous) == noteRevision(revision)) then
                     record.keepLocalNote = true
                 end
+                if own and previous and previous:match("^%d+:([01]):") == (record.high and "1" or "0") then
+                    record.keepLocalPriority = true
+                end
                 if changesRecord(record, own) then
                     result[key], revisions[key] = record, revision
                 else
@@ -994,7 +1035,7 @@ local function sameAutomaticReply(previous, entries, identity)
     for key, record in pairs(entries) do
         local old = previous.entries[key]
         if not old or old.note ~= record.note or old.high ~= record.high or old.deaths ~= record.deaths
-            or old.keepLocalNote ~= record.keepLocalNote then return false end
+            or old.keepLocalNote ~= record.keepLocalNote or old.keepLocalPriority ~= record.keepLocalPriority then return false end
     end
     for key in pairs(previous.entries) do
         if not entries[key] then return false end
@@ -1025,7 +1066,7 @@ local function finish(sender, batch)
         if previous and owner.at < previous.at then return end
         local reviewed
         if owner.automatic then
-            local settings = liveAutomaticRequest(owner)
+            local settings = permittedAutomaticRequest(owner)
             if not settings then return end
             reviewed = settings.reviewed[batch.identity] or {}
             settings.reviewed[batch.identity] = reviewed
@@ -1054,7 +1095,7 @@ local function finish(sender, batch)
     local function canImport()
         return addon.UpdateScope() and guildScope() == batch.scope and currentMember(sender, batch.identity) ~= nil
     end
-    addon.OfferImport(roster[sender].name, function()
+    local queued = addon.OfferImport(roster[sender].name, function()
         if not canImport() then return end
         local added, updated, changes, removed = addon.Merge(entries, true, batch.explicit)
         local planned = {}
@@ -1069,6 +1110,10 @@ local function finish(sender, batch)
         end
         return { added = added, updated = updated, changes = changes or {}, accept = accept, removed = removed }
     end)
+    if not queued then addon.Say(L("reviewQueueFull", roster[sender].name)) end
+    if batch.version and versionRank(batch.version) >= 3004008 then
+        C_ChatInfo.SendAddonMessage(prefix, (queued and "Y\t" or "F\t") .. batch.id, "WHISPER", roster[sender].address)
+    end
 end
 
 local function readRecord(record, faction, addedAt, deaths, name)
@@ -1113,7 +1158,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     if scope and rosterScope ~= scope and rosterName(senderName) then
         local queued, now = {}, GetTime()
         for _, packet in ipairs(pendingWhispers) do
-            if packet.scope == scope and now - packet.at < rosterWait then queued[#queued + 1] = packet end
+            if packet.scope == scope and now - packet.at < whisperWait then queued[#queued + 1] = packet end
         end
         if #queued < maxPendingWhispers then
             queued[#queued + 1] = {scope = scope, at = now, message = message, sender = senderName}
@@ -1125,6 +1170,15 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     end
     local sender, _, identity = addon.GuildSender(senderName)
     if not sender or sender == addon.UnitName("player") then return end
+    local receiptType, receiptID = message:match("^([YF])\t([%da-f]+%.[%da-f]+)$")
+    if receiptID then
+        local receipt = receipts[receiptID]
+        if receipt and receipt.key == sender and receipt.identity == identity and receipt.scope == scope then
+            receipts[receiptID] = nil
+            addon.Say(L(receiptType == "Y" and "transferDone" or "recipientQueueFull", roster[sender].name))
+        end
+        return
+    end
     -- J proposes a reply to U; K proposes the return transfer to the same peer.
     -- Either transfer needs a private C response before any records are sent.
     local direction, autoProbe, autoID = message:match("^([JK])\t([%da-f]+%.[%da-f]+)\t([%da-f]+%.[%da-f]+)$")
@@ -1136,7 +1190,8 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
             owner = automaticReplies[sender]
             if not owner or owner.id ~= autoID or not owner.sentProbe then return end
         end
-        if #autoProbe <= 16 and liveAutomaticRequest(owner) and not owner.verified[sender] then
+        if #autoProbe <= 16 and permittedAutomaticRequest(owner) and GetTime() - owner.at < requestLifetime
+            and not owner.verified[sender] then
             local reply = ("C\t%s\t%s"):format(autoProbe, capabilities)
             if C_ChatInfo.SendAddonMessage(prefix, reply, "WHISPER", roster[sender].address) == results.Success then
                 owner.verified[sender] = { id = autoProbe, identity = identity }
@@ -1205,7 +1260,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
         if pullID and (not owner or owner.scope ~= guildScope()
             or now - owner.at >= requestLifetime or owner.received[sender]
             or (owner.automatic and (not verified or verified.id ~= id or verified.identity ~= identity
-                or not liveAutomaticRequest(owner)))) then
+                or not permittedAutomaticRequest(owner)))) then
             return
         end
         local count = tonumber(number or data:match("^%d+$"))
@@ -1309,6 +1364,7 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
 end
 
 function addon.InitSync()
+    GuildAvengerDB.watchlistInbox = GuildAvengerDB.watchlistInbox or {}
     GuildAvengerDB.autoReplyGuilds = GuildAvengerDB.autoReplyGuilds or {}
     GuildAvengerDB.autoSyncGuilds = GuildAvengerDB.autoSyncGuilds or {}
     GuildAvengerDB.replyToListRequests = nil

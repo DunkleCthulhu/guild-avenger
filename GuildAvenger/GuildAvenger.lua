@@ -36,20 +36,20 @@ do
     end
 end
 
-local function lowerName(value)
+local function legacyLowerName(value)
     if string.utf8lower then
         return string.utf8lower(value)
     end
     return (value:lower():gsub("[\208\209][\128-\191]", cyrillicLower))
 end
 
-local function searchLower(value)
+local function lowerName(value)
     if string.utf8lower then return string.utf8lower(value) end
-    -- Byte-wise lower() may alter UTF-8 in a non-C locale. Keep saved keys
-    -- compatible and use an explicit case fold for search and pending names.
+    -- Byte-wise lower() may alter UTF-8 in a non-C locale.
     local ascii = value:gsub("[A-Z]", function(letter) return string.char(letter:byte() + 32) end)
     return (ascii:gsub("[\208-\210][\128-\191]", cyrillicLower))
 end
+local searchLower = lowerName
 
 local function clean(value, limit)
     if isText(value) and #value <= limit and not value:find("[%z\001-\031\127|]") then
@@ -114,6 +114,74 @@ end
 
 local function isPendingEntry(entry)
     return entry.pending == true or (entry.pendingName == true and entry.faction == nil)
+end
+
+local function rekeySaved(records, keyFor, combine)
+    local moves = {}
+    for old, record in pairs(records or {}) do
+        local key = keyFor(record)
+        if key and key ~= old then moves[#moves + 1] = {old = old, key = key} end
+    end
+    table.sort(moves, function(a, b) return a.old < b.old end)
+    for _, move in ipairs(moves) do
+        local record = records[move.old]
+        if records[move.key] then
+            combine(records[move.key], record, move.old)
+        else
+            records[move.key] = record
+        end
+        records[move.old] = nil
+    end
+end
+
+local function normalizeSavedKeys(id)
+    local db = GuildAvengerDB
+    db.normalizedLists = db.normalizedLists or {}
+    if db.normalizedLists[id] then return end
+    rekeySaved(entries, recordKey, function(keep, old, oldKey)
+        -- Keep a recoverable original when existing profiles contain both spellings.
+        db.nameMigrationBackup = db.nameMigrationBackup or {}
+        db.nameMigrationBackup[id] = db.nameMigrationBackup[id] or {}
+        db.nameMigrationBackup[id][oldKey] = old
+        keep.deaths = math.max(keep.deaths or 0, old.deaths or 0)
+        keep.high = keep.high or old.high
+        if old.seen and (not keep.seen or old.seen.at > keep.seen.at) then keep.seen = old.seen end
+        if old.faction and not keep.faction then
+            keep.faction, keep.pendingName = old.faction, nil
+        end
+        keep.guid = keep.guid or old.guid
+        if not keep.author or keep.author == "" then keep.author = old.author end
+        if old.note and old.note ~= "" and old.note ~= keep.note then
+            if not keep.note or keep.note == "" then keep.note = old.note
+            elseif #keep.note + #old.note + 3 <= noteLimit then keep.note = keep.note .. " / " .. old.note end
+        end
+    end)
+    local removed = db.removals[id]
+    rekeySaved(removed, recordKey, function(keep, old) keep.at = math.max(keep.at, old.at) end)
+    for key in pairs(removed or {}) do if entries[key] then removed[key] = nil end end
+    local season = db.seasons and db.seasons[id]
+    if season then
+        rekeySaved(season.targets, recordKey, function() season.count = season.count - 1 end)
+        rekeySaved(season.scores, function(score) return playerName(score.name) end,
+            function(keep, old) keep.count = math.max(keep.count, old.count) end)
+    end
+    local guild = db.stats and db.stats.guilds[id]
+    if guild then
+        rekeySaved(guild.peers, function(peer) return playerName(peer.name) end, function(keep, old)
+            keep.kills, keep.honor = math.max(keep.kills, old.kills), math.max(keep.honor or 0, old.honor or 0)
+            for field, total in pairs({week = "weeklyKills", honorWeek = "weeklyHonor"}) do
+                if old[field] and (not keep[field] or old[field] > keep[field]) then
+                    keep[field], keep[total] = old[field], old[total]
+                elseif old[field] and old[field] == keep[field] then
+                    keep[total] = math.max(keep[total] or 0, old[total] or 0)
+                end
+            end
+            for guid, enemy in pairs(old.enemies) do
+                if not keep.enemies[guid] or keep.enemies[guid].count < enemy.count then keep.enemies[guid] = enemy end
+            end
+        end)
+    end
+    db.normalizedLists[id] = true
 end
 
 local function importLegacy(imported, legacy, kind)
@@ -188,6 +256,7 @@ local function updateScope()
         importLegacy(entries, legacy, "G")
         GuildAvengerDB.guildsImported[id] = true
     end
+    normalizeSavedKeys(id)
     alerts, deaths, observedGuilds, guildAlerts, tokens = {}, {}, {}, {}, {}
     for unit in pairs(plates) do
         plates[unit] = false
@@ -459,8 +528,8 @@ local function scanUnit(unit, alreadySeen)
     local personalSeen = sighting(personal, now, zone)
     local guildSeen = sighting(guild, now, zone)
     if personalSeen or guildSeen then addon.RefreshUI() end
+    addon.RecordLocalMapSighting(key, name, enemyGuild)
     if key ~= alreadySeen and startAlert(key) then
-        addon.RecordLocalMapSighting(key, name, enemyGuild)
         -- Every new alert may be reported to the guild, whether it is shown alone or in a group.
         -- The enemy's guild lets guildmates who list only that guild see the report.
         addon.ReportSighting(key, entry, name, enemyGuild)
@@ -478,6 +547,15 @@ local function scanPlates()
     local now = GetTime()
     if now - lastPrune >= 30 then
         lastPrune = now
+        -- A stationary target can remain visible without a nameplate or combat events.
+        if UnitIsVisible then
+            for unit, key in pairs(tokens) do
+                if key then
+                    local visible = UnitIsVisible(unit)
+                    if ordinary(visible) and visible == true then tokens[unit] = scanUnit(unit, key) end
+                end
+            end
+        end
         for guid, observation in pairs(observedGuilds) do
             if now - observation.at > guildObservationLifetime then observedGuilds[guid] = nil end
         end
@@ -566,6 +644,10 @@ local function removalLog()
     local logs = GuildAvengerDB.removals
     if not logs[listID] then logs[listID] = {} end
     return logs[listID]
+end
+
+function addon.RemovalRecord(key)
+    return removalLog()[key]
 end
 
 local function addEnemy(input, reason, fromUnit, kind)
@@ -818,6 +900,7 @@ addon.IsText = isText
 addon.Say = say
 addon.Clean = clean
 addon.LowerName = lowerName
+addon.LegacyLowerName = legacyLowerName
 addon.SearchLower = searchLower
 addon.PlayerName = playerName
 addon.EntryName = entryName
