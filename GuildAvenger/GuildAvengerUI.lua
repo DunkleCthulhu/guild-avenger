@@ -1833,7 +1833,10 @@ end
 function addon.OpenPullInbox()
     if (dialog and dialog:IsShown()) or (review and review:IsShown()) then return end
     local offer = addon.PreviewInbox()
-    if not offer then return end
+    if not offer then
+        addon.RefreshUI()
+        return
+    end
     showReview(offer)
     return true
 end

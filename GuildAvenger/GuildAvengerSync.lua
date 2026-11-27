@@ -11,6 +11,7 @@ local incoming = {}
 local published, waiting = {}, {}
 local requestedLists, guildRequests = {}, {}
 local pendingGuildRequests = {}
+local pendingWhispers = {}
 local pullInbox, inboxScope = {}, nil
 local lastListRequest
 local hourlyInterval, loginSyncPending = 3600, true
@@ -18,6 +19,7 @@ local automaticReplies, automaticReplyScope = {}, nil
 local requestLifetime = 300
 local requestCooldown = 60
 local rosterWait, maxPendingRequests = 15, 32
+local maxPendingWhispers = 128
 local autoReplyRevision = 0
 local autoSyncRevision = 0
 local packetLimit = 240
@@ -80,15 +82,6 @@ local function inbox()
     return pullInbox
 end
 
-function addon.InboxCount()
-    local count = 0
-    for sender, reply in pairs(inbox()) do
-        local member = roster[sender]
-        if addon.IsGuildMember(sender) and member.identity == reply.identity then count = count + 1 end
-    end
-    return count
-end
-
 local function sourceLabel(names)
     if #names <= 4 then return table.concat(names, ", ") end
     return table.concat(names, ", ", 1, 4) .. " +" .. (#names - 4)
@@ -104,33 +97,77 @@ local function recordRevision(record)
     return ("%d:%d:%d:%d:%d"):format(record.deaths, record.high and 1 or 0, #record.note, first, second)
 end
 
-function addon.PreviewInbox()
-    local scope = guildScope()
-    local replies, senders, combined, notes, sources, existing = {}, {}, {}, {}, {}, {}
-    for key, reply in pairs(inbox()) do
-        if currentMember(key, reply.identity) then
-            replies[key] = reply
-            senders[#senders + 1] = key
+local function reviewNote(record, own)
+    if record.keepLocalNote and own then return own.note end
+    return record.note
+end
+
+local function changesRecord(record, own)
+    return not own or reviewNote(record, own) ~= own.note or record.deaths > own.deaths
+        or (record.high == true) ~= (own.high == true)
+end
+
+local function hasReviewableChange(key, record)
+    return not record.removed and addon.EligibleRecord(key, record) and changesRecord(record, addon.WatchlistRecord(key))
+end
+
+local function acknowledgeReply(reply, settings)
+    if not settings or not reply.revisions then return end
+    local reviewed = settings.reviewed[reply.identity] or {}
+    settings.reviewed[reply.identity] = reviewed
+    for key, revision in pairs(reply.revisions) do reviewed[key] = revision end
+end
+
+local function reviewableReplies()
+    local current, replies = inbox(), {}
+    local count = 0
+    for sender, reply in pairs(current) do
+        if currentMember(sender, reply.identity) then
+            for key, record in pairs(reply.entries) do
+                if hasReviewableChange(key, record) then
+                    replies[sender], count = reply, count + 1
+                    break
+                end
+            end
+            if not replies[sender] then
+                acknowledgeReply(reply, autoSyncSettings())
+                current[sender] = nil
+            end
         end
     end
+    return replies, count
+end
+
+function addon.InboxCount()
+    local _, count = reviewableReplies()
+    return count
+end
+
+function addon.PreviewInbox()
+    local scope = guildScope()
+    local replies = reviewableReplies()
+    local senders, combined, notes, sources, existing = {}, {}, {}, {}, {}
+    for key in pairs(replies) do senders[#senders + 1] = key end
     if #senders == 0 then return end
     table.sort(senders)
     for _, entry in ipairs(addon.Entries()) do existing[addon.RecordKey(entry)] = entry end
     for _, sender in ipairs(senders) do
         local reply = replies[sender]
         for key, record in pairs(reply.entries) do
+            local note = reviewNote(record, existing[key])
             if not combined[key] then
                 local copy = {}
                 for field, value in pairs(record) do copy[field] = value end
+                copy.note, copy.keepLocalNote = note, nil
                 combined[key], sources[key], notes[key] = copy, {}, {}
             end
             local item = combined[key]
             item.deaths = math.max(item.deaths, record.deaths)
             item.high = item.high or record.high
             sources[key][#sources[key] + 1] = reply.sender
-            local noteSources = notes[key][record.note] or {}
+            local noteSources = notes[key][note] or {}
             noteSources[#noteSources + 1] = reply.sender
-            notes[key][record.note] = noteSources
+            notes[key][note] = noteSources
         end
     end
     for key, item in pairs(combined) do
@@ -177,11 +214,9 @@ function addon.PreviewInbox()
         local current = inbox()
         local settings = autoSyncSettings()
         for key, reply in pairs(replies) do
-            if current[key] == reply then current[key] = nil end
-            if settings and reply.automatic then
-                local reviewed = settings.reviewed[reply.identity] or {}
-                settings.reviewed[reply.identity] = reviewed
-                for recordKey, record in pairs(reply.entries) do reviewed[recordKey] = recordRevision(record) end
+            if current[key] == reply then
+                current[key] = nil
+                acknowledgeReply(reply, settings)
             end
         end
         local newEntries, updatedEntries, _, removedEntries = addon.Merge(selection, false, true, planned)
@@ -234,7 +269,16 @@ function addon.ReadRoster()
         roster, rosterScope = {}, nil
     end
     addon.RefreshSuggestions()
-    if rosterScope then drainGuildRequests() end
+    if rosterScope then
+        local queued, now = pendingWhispers, GetTime()
+        pendingWhispers = {}
+        for _, packet in ipairs(queued) do
+            if packet.scope == scope and now - packet.at < rosterWait then
+                addon.Receive(prefix, packet.message, "WHISPER", packet.sender)
+            end
+        end
+        drainGuildRequests()
+    end
 end
 
 function addon.RefreshRoster()
@@ -276,6 +320,10 @@ end
 function addon.GuildSender(raw, guildBroadcast)
     local key, _, suffix, qualified = rosterName(raw)
     local member = guildMember(key)
+    if guildBroadcast and key and not member and guildScope() and rosterScope ~= guildScope() then
+        addon.ReadRoster()
+        member = guildMember(key)
+    end
     if member and (member.suffix == suffix or (guildBroadcast and not qualified)) and currentMember(key, member.identity) then
         return key, member.name, member.identity
     end
@@ -525,14 +573,15 @@ function addon.Share(input, selection, includeRemovals)
         return false, L("sharingRequiresGuild")
     end
     addon.RefreshRoster()
-    if rosterScope ~= guildScope() then
-        return false, L("rosterLoading")
-    end
+    if rosterScope ~= guildScope() then addon.ReadRoster() end
+    if rosterScope ~= guildScope() then return false, L("rosterLoading") end
     local key, message = recipient(input)
     if not key or key == addon.UnitName("player") or not addon.IsGuildMember(key) then
         return false, message or L("enterRecipient")
     end
     local member = roster[key]
+    member = currentMember(key, member.identity)
+    if not member then return false, L("recipientLeftRoster") end
     if not member.online then
         return false, L("recipientOffline", member.name)
     end
@@ -906,30 +955,46 @@ local function liveAutomaticRequest(owner)
         and GetTime() - owner.at < requestLifetime and autoSyncSettings()
 end
 
+local function noteRevision(revision)
+    return revision:match("^%d+:%d+:(.+)$")
+end
+
 local function reviewableRecords(entries, reviewed)
-    local candidates = {}
+    local result, revisions = {}, {}
     if reviewed then
         for key in pairs(reviewed) do
             if not entries[key] then reviewed[key] = nil end
         end
     end
     for key, record in pairs(entries) do
-        if not reviewed or reviewed[key] ~= recordRevision(record) then candidates[key] = record end
+        if not reviewed then
+            if hasReviewableChange(key, record) then result[key] = record end
+        else
+            local revision = recordRevision(record)
+            local previous = reviewed[key]
+            if previous ~= revision and addon.EligibleRecord(key, record) then
+                local own = addon.WatchlistRecord(key)
+                -- A peer's initial or unchanged note is not a change to our local comment.
+                if own and (not previous or noteRevision(previous) == noteRevision(revision)) then
+                    record.keepLocalNote = true
+                end
+                if changesRecord(record, own) then
+                    result[key], revisions[key] = record, revision
+                else
+                    reviewed[key] = revision
+                end
+            end
+        end
     end
-    local _, _, changes = addon.Merge(candidates, true, true)
-    local result = {}
-    for _, change in ipairs(changes or {}) do
-        local key = change.entry or change.key
-        result[key] = candidates[key]
-    end
-    return result
+    return result, reviewed and revisions or nil
 end
 
 local function sameAutomaticReply(previous, entries, identity)
     if not previous or not previous.automatic or previous.identity ~= identity then return false end
     for key, record in pairs(entries) do
         local old = previous.entries[key]
-        if not old or old.note ~= record.note or old.high ~= record.high or old.deaths ~= record.deaths then return false end
+        if not old or old.note ~= record.note or old.high ~= record.high or old.deaths ~= record.deaths
+            or old.keepLocalNote ~= record.keepLocalNote then return false end
     end
     for key in pairs(previous.entries) do
         if not entries[key] then return false end
@@ -956,33 +1021,34 @@ local function finish(sender, batch)
         if owner.received[sender] then return end
         owner.received[sender] = true
         local current = inbox()
+        local previous = current[sender]
+        if previous and owner.at < previous.at then return end
+        local reviewed
         if owner.automatic then
             local settings = liveAutomaticRequest(owner)
             if not settings then return end
-            local previous = current[sender]
-            if previous and owner.at < previous.at then return end
-            entries = reviewableRecords(entries, settings.reviewed[batch.identity])
-            if not next(entries) then
-                if previous and previous.automatic then
-                    current[sender] = nil
-                    addon.RefreshUI()
-                end
-                return
-            end
-            if sameAutomaticReply(previous, entries, batch.identity) then
-                previous.at = owner.at
-                return
-            end
+            reviewed = settings.reviewed[batch.identity] or {}
+            settings.reviewed[batch.identity] = reviewed
         end
-        if not current[sender] or owner.at >= current[sender].at then
-            current[sender] = {sender = roster[sender].name, entries = entries, at = owner.at, identity = batch.identity,
-                automatic = owner.automatic}
-            if not owner.automatic and not owner.notified then
-                owner.notified = true
-                addon.Say(L("watchlistReplyArrived"))
+        local changes, revisions = reviewableRecords(entries, reviewed)
+        if not next(changes) then
+            if previous and (not owner.automatic or previous.automatic) then
+                current[sender] = nil
+                addon.RefreshUI()
             end
-            addon.RefreshUI()
+            return
         end
+        if owner.automatic and sameAutomaticReply(previous, changes, batch.identity) then
+            previous.at, previous.revisions = owner.at, revisions
+            return
+        end
+        current[sender] = {sender = roster[sender].name, entries = changes, at = owner.at, identity = batch.identity,
+            automatic = owner.automatic, revisions = revisions}
+        if not owner.automatic and not owner.notified then
+            owner.notified = true
+            addon.Say(L("watchlistReplyArrived"))
+        end
+        addon.RefreshUI()
         return
     end
     local function canImport()
@@ -1041,6 +1107,20 @@ function addon.Receive(receivedPrefix, message, channel, senderName)
     if channel == "GUILD" then
         local mode, id = message:match("^([PU])\t([%da-f]+%.[%da-f]+)$")
         if id and #id <= 16 then queueGuildRequest(senderName, id, mode == "U") end
+        return
+    end
+    local scope = guildScope()
+    if scope and rosterScope ~= scope and rosterName(senderName) then
+        local queued, now = {}, GetTime()
+        for _, packet in ipairs(pendingWhispers) do
+            if packet.scope == scope and now - packet.at < rosterWait then queued[#queued + 1] = packet end
+        end
+        if #queued < maxPendingWhispers then
+            queued[#queued + 1] = {scope = scope, at = now, message = message, sender = senderName}
+        end
+        pendingWhispers = queued
+        addon.ReadRoster()
+        if rosterScope ~= scope then addon.RefreshRoster() end
         return
     end
     local sender, _, identity = addon.GuildSender(senderName)

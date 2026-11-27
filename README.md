@@ -93,6 +93,8 @@ In 3.4.2, open **Requests → Request guild watchlists** to ask the guild. If a 
 
 In 3.4.5, enable **Settings → Automatically exchange watchlists** for a two-way sync with online guildmates who enabled the same option. It starts when your guild roster is ready after login and checks again hourly. **Inbox** shows new or changed entries for approval. Entries reviewed and skipped stay out of automatic results until their contents change. Automatic checks stay quiet in chat and use the current character and guild's setting.
 
+From 3.4.6, the Inbox badge counts only replies with changes left to review. Automatic exchange keeps your comment when a guildmate first shares an existing entry or repeats the same comment. A later edit by that guildmate can appear for review. Manual sharing can still show different comments.
+
 ## Guild sightings
 
 Guild Avenger can tell guildmates where you met a listed enemy. The three options in **Settings** (**Налаштування**) start off and apply to your current character and guild.

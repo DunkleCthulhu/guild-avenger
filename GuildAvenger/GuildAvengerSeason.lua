@@ -155,7 +155,7 @@ end
 function addon.ReceiveSeason(mark, message, channel, senderName)
     if not addon.IsText(mark) or mark ~= prefix or not addon.IsText(channel) or channel ~= "GUILD"
         or not addon.IsText(message) or #message > 150 then return end
-    local sender, name = addon.GuildSender(senderName)
+    local sender, name = addon.GuildSender(senderName, true)
     local guild = scope()
     if not guild or not sender or sender == addon.UnitName("player") then return end
     local season = addon.ActiveSeason()

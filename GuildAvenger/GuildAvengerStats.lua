@@ -2,6 +2,7 @@ local _, addon = ...
 local L = addon.Text
 local prefix = "GuildAvStats1"
 local maxCount = 2147483647
+local results = Enum.SendAddonMessageResult
 local journalLimit = 100
 local heldDeath, latestDeath, sendTicker, lastRequest, lastReply
 local statsRevision, attackersRevision = 0, 0
@@ -259,9 +260,9 @@ local function publish()
             stop()
             return
         end
-        local results = Enum.SendAddonMessageResult
         local result = send(packets[index])
-        if result == results.AddonMessageThrottle or result == results.ChannelThrottle then return end
+        if result == results.AddonMessageThrottle or result == results.ChannelThrottle
+            or result == results.AddOnMessageLockdown then return end
         index = index + 1
         progressAt = GetTime()
         if result ~= results.Success or index > #packets then stop() end
@@ -277,15 +278,19 @@ function addon.SetStatsSharing(enabled)
 end
 
 function addon.RequestStats()
-    local score, _, key = ownScore()
+    if not addon.UpdateScope() then return L("statsRosterRequired") end
+    local score, scope, key = ownScore()
+    if score and not addon.IsGuildMember(key) then addon.ReadRoster() end
     if not score or not addon.IsGuildMember(key) then
         addon.RefreshRoster()
         return L("statsRosterRequired")
     end
     local now = GetTime()
-    if lastRequest and now - lastRequest < 20 then return L("statsRequestCooldown") end
-    if send("Q") ~= Enum.SendAddonMessageResult.Success then return L("statsRequestFailed") end
-    lastRequest = now
+    if lastRequest and lastRequest.scope == scope and now - lastRequest.at < 20 then return L("statsRequestCooldown") end
+    local result = send("Q")
+    if result == results.AddOnMessageLockdown then return L("chatLockdown") end
+    if result ~= results.Success then return L("statsRequestFailed") end
+    lastRequest = {at = now, scope = scope}
     publish()
     return L("statsRequestSent")
 end
@@ -293,13 +298,13 @@ end
 function addon.ReceiveStats(receivedPrefix, message, channel, sender)
     if not addon.IsText(receivedPrefix) or receivedPrefix ~= prefix
         or not addon.IsText(channel) or channel ~= "GUILD" or not addon.IsText(message) or #message > 180 then return end
-    local key, name = addon.GuildSender(sender)
+    local key, name = addon.GuildSender(sender, true)
     local own, scope, ownKey = ownScore()
     if not own or not key or key == ownKey then return end
     if message == "Q" then
         local now = GetTime()
-        if own.share and (not lastReply or now - lastReply >= 45) then
-            lastReply = now
+        if own.share and (not lastReply or lastReply.scope ~= scope or now - lastReply.at >= 45) then
+            lastReply = {at = now, scope = scope}
             C_Timer.After(math.random(4, 28) / 10, function()
                 if addon.Scope() == scope and ownScore() == own then publish() end
             end)

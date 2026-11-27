@@ -536,12 +536,84 @@ class SharingTests(unittest.TestCase):
         self.wire.error = None
         self.assertTrue(self.bohdan.addon.ReplyToWatchlistRequest(reply.sender, reply.id)[0])
         self.wire.advance(4)
-        preview = self.anna.addon.PreviewInbox()
-        self.assertEqual(preview.replyCount, 1)
-        self.assertEqual(len(preview.changes), 0)
-        self.anna.addon.OpenPullInbox()
-        self.anna.click("GuildAvengerReview", "done")
         self.assertEqual(self.anna.addon.InboxCount(), 0)
+        self.assertIsNone(self.anna.addon.PreviewInbox())
+        self.assertIsNone(self.anna.addon.OpenPullInbox())
+
+    def test_inbox_badge_clears_when_pending_reply_has_no_remaining_changes(self):
+        self.bohdan.add("Enemy Guild", "Same note")
+        self.anna.addon.ToggleUI()
+        self.anna.addon.RequestWatchlists()
+        self.wire.flush()
+        request = self.bohdan.addon.WatchlistRequests()[1]
+        self.bohdan.addon.ReplyToWatchlistRequest(request.sender, request.id)
+        self.wire.advance(8)
+        self.assertTrue(self.anna.g.hasButton("GuildAvengerPanel", "Inbox (1)"))
+        self.anna.add("Enemy Guild", "Same note")
+        self.anna.addon.RefreshUI()
+        self.assertTrue(self.anna.g.hasButton("GuildAvengerPanel", "Inbox (0)"))
+        self.assertIsNone(self.anna.addon.PreviewInbox())
+
+    def test_direct_single_record_waits_for_receivers_roster(self):
+        key = self.anna.add("Enemy Player", "One selected target", "P")
+        ignored = self.anna.add("Unselected Guild")
+        self.bohdan.g.rosterReady = False
+        self.bohdan.refresh_roster()
+        selection = self.anna.lua.table_from({key: True})
+        self.assertTrue(self.anna.addon.Share(self.bohdan.name, selection, False)[0])
+        self.wire.advance(5)
+        self.assertIsNone(self.bohdan.g.GuildAvengerReview)
+        self.bohdan.g.rosterReady = True
+        self.bohdan.refresh_roster()
+        self.bohdan.click("GuildAvengerReview", "accept")
+        self.assertEqual(self.bohdan.read(key).note, "One selected target")
+        self.assertIsNone(self.bohdan.read(ignored))
+
+    def test_guild_rankings_accept_bare_names_and_keep_sharing_opt_in(self):
+        self.wire.bare_guild_sender = True
+        self.bohdan.addon.SetStatsSharing(True)
+        self.bohdan.addon.RecordHonor(77)
+        self.bohdan.addon.RecordRevenge()
+        self.clara.addon.RecordHonor(200)
+        self.clara.addon.RecordRevenge()
+        self.wire.advance(3)
+        self.anna.g.fire("CHAT_MSG_ADDON", "GuildAvStats1", "R\t999", "GUILD", "Bohdan Fox-WrongLayer")
+        self.anna.g.fire("CHAT_MSG_ADDON", "GuildAvStats1", "R\t999", "GUILD", "Unknown Name")
+        self.anna.g.fire("CHAT_MSG_ADDON", "GuildAvStats1", "R\t999", "WHISPER", self.bohdan.address)
+        self.assertEqual(self.anna.addon.RequestStats(), self.anna.text("statsRequestSent"))
+        self.wire.advance(8)
+        for weekly in [True, False]:
+            honor = self.anna.addon.StatsRows(2, weekly)
+            killing = self.anna.addon.StatsRows(4, weekly)
+            self.assertEqual([(row.name, row.count) for row in honor.values()], [(self.bohdan.name, 77)])
+            self.assertEqual([(row.name, row.count) for row in killing.values()], [(self.bohdan.name, 1)])
+
+    def test_local_comments_are_not_reoffered_by_unchanged_peer_snapshots(self):
+        targets = [("Enemy Guild", "G"), ("Enemy Player", "P")]
+        for name, kind in targets:
+            self.anna.add(name, "Shared note", kind)
+            self.bohdan.add(name, "Shared note", kind)
+        self.anna.addon.SetAutoSyncWatchlists(True)
+        self.bohdan.addon.SetAutoSyncWatchlists(True)
+        self.wire.advance(10)
+        self.assertEqual(self.anna.addon.InboxCount(), 0)
+        for name, kind in targets:
+            self.assertTrue(self.anna.addon.EditNote(name, "My local note", kind)[0])
+        self.wire.advance(3600)
+        self.assertEqual(self.anna.addon.InboxCount(), 0)
+        guild, player = [self.anna.addon.EntryName(name, kind)[0] for name, kind in targets]
+        self.bohdan.read(guild).deaths = 5
+        self.bohdan.read(player).note = "Actually changed by peer"
+        self.wire.advance(3600)
+        preview = self.anna.addon.PreviewInbox()
+        keyed = {row.key: row for row in preview.changes.values()}
+        self.assertEqual(keyed[guild].record.note, "My local note")
+        self.assertEqual(keyed[guild].record.deaths, 5)
+        self.assertEqual(keyed[player].record.note, "Actually changed by peer")
+        self.assertTrue(self.anna.addon.EditNote("Enemy Guild", "Edited again while waiting", "G")[0])
+        updated = self.anna.addon.PreviewInbox()
+        self.assertEqual({row.key: row.record.note for row in updated.changes.values()}[guild],
+                         "Edited again while waiting")
 
     def test_dismiss_expiry_and_opt_in(self):
         self.bohdan.add("Enemy Guild")
